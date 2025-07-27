@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title | default("nbscribe - AI Jupyter Assistant") }}</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 2rem; 
+            background-color: #f8f9fa;
+        }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 { 
+            color: #333; 
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 2rem;
+        }
+        .status {
+            padding: 1rem;
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 4px;
+            color: #155724;
+            margin-bottom: 1rem;
+        }
+        .info {
+            padding: 1rem;
+            background: #e7f3ff;
+            border: 1px solid #b3d7ff;
+            border-radius: 4px;
+            color: #0c5460;
+        }
+        .chat-container {
+            margin: 2rem 0;
+        }
+        .chat-history {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            height: 300px;
+            padding: 1rem;
+            overflow-y: auto;
+            background: #fafafa;
+            margin-bottom: 1rem;
+        }
+        .message {
+            margin-bottom: 1rem;
+            padding: 0.5rem;
+            border-radius: 4px;
+        }
+        .message.user {
+            background: #e3f2fd;
+            text-align: right;
+        }
+        .message.assistant {
+            background: #f1f8e9;
+        }
+        .message .sender {
+            font-weight: bold;
+            margin-bottom: 0.25rem;
+        }
+        .message .content {
+            white-space: pre-wrap;
+        }
+        .chat-form {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .chat-input {
+            flex: 1;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .chat-submit {
+            padding: 0.75rem 1.5rem;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .chat-submit:hover {
+            background: #0056b3;
+        }
+        .chat-submit:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .error {
+            padding: 1rem;
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 4px;
+            color: #721c24;
+            margin: 1rem 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ service_name | default("nbscribe") }}</h1>
+        <p class="subtitle">{{ description | default("AI-powered Jupyter Notebook assistant") }}</p>
+        
+        <div class="status">
+            Server is running! 🚀 Version {{ version | default("0.1.0") }}
+        </div>
+        
+        <div class="chat-container">
+            <h3>Chat with nbscribe</h3>
+            <div id="chat-history" class="chat-history">
+                <div class="message assistant">
+                    <div class="sender">nbscribe</div>
+                    <div class="content">Hello! I'm your AI Jupyter assistant. Type a message below to get started.</div>
+                </div>
+            </div>
+            
+            <form id="chat-form" class="chat-form">
+                <input 
+                    type="text" 
+                    id="chat-input" 
+                    class="chat-input" 
+                    placeholder="Type your message here..."
+                    required
+                    autocomplete="off"
+                >
+                <button type="submit" id="chat-submit" class="chat-submit">Send</button>
+            </form>
+            
+            <div id="error-message" class="error" style="display: none;"></div>
+        </div>
+        
+        <div class="info">
+            <strong>Current Features:</strong><br>
+            ✅ Real-time chat functionality<br>
+            🔄 Coming soon: Notebook integration, conversation history, code syntax highlighting
+        </div>
+        
+        {% if endpoints %}
+        <div style="margin-top: 2rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
+            <strong>Available API endpoints:</strong>
+            <ul>
+                {% for name, path in endpoints.items() %}
+                <li><code>{{ path }}</code> - {{ name }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        class ChatInterface {
+            constructor() {
+                this.chatForm = document.getElementById('chat-form');
+                this.chatInput = document.getElementById('chat-input');
+                this.chatSubmit = document.getElementById('chat-submit');
+                this.chatHistory = document.getElementById('chat-history');
+                this.errorMessage = document.getElementById('error-message');
+                
+                this.initEventListeners();
+            }
+            
+            initEventListeners() {
+                this.chatForm.addEventListener('submit', (e) => this.handleSubmit(e));
+                
+                // Allow Enter key to submit (but Shift+Enter for new line)
+                this.chatInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        this.chatForm.dispatchEvent(new Event('submit'));
+                    }
+                });
+            }
+            
+            async handleSubmit(e) {
+                e.preventDefault();
+                
+                const message = this.chatInput.value.trim();
+                if (!message) return;
+                
+                // Add user message to chat
+                this.addMessage('user', 'You', message);
+                
+                // Clear input and disable form
+                this.chatInput.value = '';
+                this.setLoading(true);
+                this.hideError();
+                
+                try {
+                    const response = await this.sendMessage(message);
+                    this.addMessage('assistant', 'nbscribe', response.response);
+                } catch (error) {
+                    this.showError(`Error: ${error.message}`);
+                    console.error('Chat error:', error);
+                } finally {
+                    this.setLoading(false);
+                    this.chatInput.focus();
+                }
+            }
+            
+            async sendMessage(message) {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error || 'Unknown error occurred');
+                }
+                
+                return data;
+            }
+            
+            addMessage(type, sender, content) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${type}`;
+                
+                const senderDiv = document.createElement('div');
+                senderDiv.className = 'sender';
+                senderDiv.textContent = sender;
+                
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'content';
+                contentDiv.textContent = content;
+                
+                messageDiv.appendChild(senderDiv);
+                messageDiv.appendChild(contentDiv);
+                
+                this.chatHistory.appendChild(messageDiv);
+                this.scrollToBottom();
+            }
+            
+            setLoading(loading) {
+                this.chatSubmit.disabled = loading;
+                this.chatInput.disabled = loading;
+                this.chatSubmit.textContent = loading ? 'Sending...' : 'Send';
+            }
+            
+            showError(message) {
+                this.errorMessage.textContent = message;
+                this.errorMessage.style.display = 'block';
+            }
+            
+            hideError() {
+                this.errorMessage.style.display = 'none';
+            }
+            
+            scrollToBottom() {
+                this.chatHistory.scrollTop = this.chatHistory.scrollHeight;
+            }
+        }
+        
+        // Initialize chat interface when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new ChatInterface();
+        });
+    </script>
+</body>
+</html> 

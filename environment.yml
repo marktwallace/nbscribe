@@ -1,0 +1,15 @@
+name: nbscribe
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - jupyter
+  - jupyterlab
+  - nbformat
+  - jinja2
+  - pip:
+    - fastapi==0.104.1
+    - uvicorn[standard]==0.24.0
+    - python-multipart==0.0.6 
