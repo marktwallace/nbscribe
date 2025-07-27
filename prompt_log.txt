@@ -47,14 +47,34 @@ curl -X POST http://localhost:5317/api/chat \
 open http://localhost:5317
 
 User:
+... we worked through the project plan for a while, then I "make" it ask me questions
+
+OK, let's get this straight. My OPENAI_API_KEY is in my env, it will not be in this project directory, but you can assume it exists. Maybe we should add and example env file that get loaded for documentation purposes? What is the most typical way top explain to users in a READMO fro providing an API key? I would like to model it on popular projects so it is predicatble. Are there any other open questions before doing LLM integration?
 
 Assistant:
+...it asks a bunch of questions, then I answer them all...
 
 User:
+Answers:
+1. Let do langchain from the beginning. It sets us up to be vendor neutral. But I do not want to use many of langchains features -- mostly just connection -- I do not want it tracking my context, since we will do that in the live xhtml doc as described in the design. *No hidden state, anywhere*
+
+2. gpt-4.1 is the model we will use
+
+3. start with Simple text responses
+
+4. No hidden state -- the XHTML file will be the bases of our context -- all content in there (not display logic) get sent. When we need to sumerize the file, we "roll" it to a log directory. For now, the memory is just the history, but when we "roll" to another log file we need to summerize the previous conversation and that becomes memory. We may in the future create "project memories" and if we do, they should be explicit is a user visible and editable file. We will do sumrization and possible memories in the future. They can be added to the plan, but no code yet.
+
+5. I do not like "fallbacks" -- fail early and often. No rate limiting at all -- this is single user. Error logging should be complete, including stack traces.
+
+6. Start with prompt file loading. The file that is loaded from /prompts can be basic, for now.
 
 Assistant:
+Excellent! Very clear requirements. I love the "no hidden state" principle - everything should be explicit and user-visible. Let me implement LLM integration with these exact specifications.
+...
 
 User:
+...
+OK, this is working as expected now. I want to clear some cruft before moving to notebook integration. First, lets get rid of the text in the xhtml that is after the form with the "send". Then, lets adjuat this to be more optimal to the "live" xhtml document concept. That means that static parts of the xhtml doc shoul be included were we can. like Javascript, CSS, and any boiler plate or common features that need to be in every xhtml "conversation log" -- we want the file to be a tight log of the content of the interaction. I think this means that we are reordering our plan to work on the chat log system some more before moving to notebook integration.
 
 Assistant:
 

@@ -8,6 +8,60 @@ This tool is targeted toward computational researchers who already use Jupyter i
 
 ---
 
+## Quick Start
+
+### Prerequisites
+- Python 3.12+ 
+- OpenAI API key ([get one here](https://platform.openai.com/api-keys))
+
+### Setup
+
+1. **Clone and setup environment:**
+   ```bash
+   git clone <repository-url>
+   cd nbscribe
+   
+   # Using conda (recommended)
+   conda env create -f environment.yml
+   conda activate nbscribe
+   
+   # OR using pip
+   pip install -r requirements.txt
+   ```
+
+2. **Configure your OpenAI API key:**
+   
+   **Option A: Environment variable (recommended)**
+   ```bash
+   export OPENAI_API_KEY="your_api_key_here"
+   ```
+   
+   **Option B: .env file**
+   ```bash
+   cp .env.example .env
+   # Edit .env and add your API key
+   ```
+
+3. **Run the server:**
+   ```bash
+   python main.py
+   ```
+
+4. **Open your browser:**
+   ```
+   http://localhost:5317
+   ```
+
+### Getting Your OpenAI API Key
+
+1. Go to [OpenAI Platform](https://platform.openai.com/api-keys)
+2. Sign in or create an account
+3. Click "Create new secret key"
+4. Copy the key and save it securely
+5. Add billing information if prompted
+
+---
+
 ## Core Components
 
 ### 1. `server.py` (FastAPI backend)

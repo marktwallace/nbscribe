@@ -20,16 +20,30 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and XHTM
   - [x] Add FastAPI, uvicorn, jinja2
 
 ### Basic LLM Integration
-- [ ] Create `llm_interface.py` stub
-  - [ ] Hardcoded response for testing
-  - [ ] Basic OpenAI integration (when ready)
-  - [ ] Simple prompt loading
-- [ ] Wire chat interface to backend
-  - [ ] Form submission to API
-  - [ ] Display responses in chat
-  - [ ] Basic error handling
+- [x] Create `llm_interface.py` stub
+  - [x] ~~Hardcoded response for testing~~ (skipped - went straight to LLM)
+  - [x] Basic OpenAI integration (LangChain connection)
+  - [x] Simple prompt loading
+- [x] Wire chat interface to backend
+  - [x] Form submission to API
+  - [x] Display responses in chat
+  - [x] Basic error handling
 
-### Notebook Integration
+### Chat Log System (Priority)
+- [x] Design live XHTML conversation log format
+  - [x] Self-contained document with embedded CSS/JS
+  - [x] Conversation metadata (session ID, timestamps)
+  - [x] Clean message structure for tight logging
+- [ ] Implement XHTML log persistence
+  - [ ] Save conversation as standalone XHTML file
+  - [ ] Load existing conversation log on startup
+  - [ ] Parse XHTML to extract conversation context
+- [ ] Enhance log format
+  - [ ] Timestamps for each message
+  - [ ] Code block syntax highlighting
+  - [ ] Message threading/context
+
+### Notebook Integration (After Chat Log)
 - [ ] Create `notebook_editor.py`
   - [ ] Read notebook with `nbformat`
   - [ ] Basic cell insertion
@@ -38,24 +52,22 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and XHTM
   - [ ] Create test notebook
   - [ ] Verify read/write operations
 
-### Chat Log System
-- [ ] Design `chat_log.xhtml` format
-  - [ ] User/assistant message structure
-  - [ ] Timestamps
-  - [ ] Code block formatting
-- [ ] Implement log persistence
-  - [ ] Append new messages
-  - [ ] Load existing log on startup
-
 ## Phase 2: Enhanced Features
 *After proof of concept is working*
 
-- [ ] Real OpenAI integration
-- [ ] Prompt system (`prompts/` folder)
+- [x] Real OpenAI integration
+- [x] Prompt system (`prompts/` folder)
 - [ ] Better UI/UX
-- [ ] Log rolling/summarization
+- [ ] **Conversation Memory & Rolling**
+  - [ ] XHTML conversation log as context source
+  - [ ] Log rolling to archive directory with summarization
+  - [ ] Project memories (explicit, user-visible files)
 - [ ] Jupyter integration improvements
 - [ ] Error handling & validation
+- [ ] **Future Memory Features**
+  - [ ] Conversation summarization when rolling logs
+  - [ ] Project-specific memory files (user-editable)
+  - [ ] Memory management UI
 
 ## Getting Started Commands
 

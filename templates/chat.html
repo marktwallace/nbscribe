@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ title | default("nbscribe - AI Jupyter Assistant") }}</title>
+    <title>{{ title | default("nbscribe - Conversation Log") }}</title>
+    <meta name="generator" content="nbscribe {{ version | default('0.1.0') }}">
+    <meta name="conversation-id" content="{{ conversation_id | default('default') }}">
+    <meta name="created" content="{{ created_at | default('') }}">
     <style>
         body { 
             font-family: Arial, sans-serif; 
@@ -26,20 +29,18 @@
             color: #666;
             margin-bottom: 2rem;
         }
-        .status {
-            padding: 1rem;
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-            border-radius: 4px;
-            color: #155724;
-            margin-bottom: 1rem;
+        .conversation-header {
+            border-bottom: 2px solid #eee;
+            padding-bottom: 1rem;
+            margin-bottom: 2rem;
         }
-        .info {
-            padding: 1rem;
-            background: #e7f3ff;
-            border: 1px solid #b3d7ff;
-            border-radius: 4px;
-            color: #0c5460;
+        .conversation-meta {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 0.5rem;
+        }
+        .conversation-meta span {
+            margin-right: 1rem;
         }
         .chat-container {
             margin: 2rem 0;
@@ -111,12 +112,14 @@
 </head>
 <body>
     <div class="container">
-        <h1>{{ service_name | default("nbscribe") }}</h1>
-        <p class="subtitle">{{ description | default("AI-powered Jupyter Notebook assistant") }}</p>
-        
-        <div class="status">
-            Server is running! 🚀 Version {{ version | default("0.1.0") }}
-        </div>
+        <header class="conversation-header">
+            <h1>{{ service_name | default("nbscribe") }} - Conversation Log</h1>
+            <div class="conversation-meta">
+                <span>Session: {{ conversation_id | default("default") }}</span>
+                <span>Started: {{ created_at | default("") }}</span>
+                <span>Version: {{ version | default("0.1.0") }}</span>
+            </div>
+        </header>
         
         <div class="chat-container">
             <h3>Chat with nbscribe</h3>
@@ -141,23 +144,6 @@
             
             <div id="error-message" class="error" style="display: none;"></div>
         </div>
-        
-        <div class="info">
-            <strong>Current Features:</strong><br>
-            ✅ Real-time chat functionality<br>
-            🔄 Coming soon: Notebook integration, conversation history, code syntax highlighting
-        </div>
-        
-        {% if endpoints %}
-        <div style="margin-top: 2rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
-            <strong>Available API endpoints:</strong>
-            <ul>
-                {% for name, path in endpoints.items() %}
-                <li><code>{{ path }}</code> - {{ name }}</li>
-                {% endfor %}
-            </ul>
-        </div>
-        {% endif %}
     </div>
 
     <script>

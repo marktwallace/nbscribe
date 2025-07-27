@@ -54,35 +54,42 @@ def create_app():
     @app.post("/api/chat", response_model=ChatResponse)
     async def chat_endpoint(message: ChatMessage):
         """
-        Main chat endpoint for receiving user messages
-        Currently returns a placeholder response
+        Main chat endpoint for receiving user messages and generating AI responses
         """
         try:
-            # Placeholder response - will be replaced with LLM integration
-            response_text = f"Echo: {message.message}"
+            # Import here to avoid circular imports and lazy loading
+            from src.llm_interface import generate_response
+            
+            # Generate response using LLM (no conversation context for now)
+            response_text = generate_response(message.message)
             
             return ChatResponse(
                 response=response_text,
                 success=True
             )
         except Exception as e:
+            # Log the full error with stack trace for debugging
+            import traceback
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Chat endpoint error: {e}")
+            logger.error(traceback.format_exc())
+            
             raise HTTPException(status_code=500, detail=str(e))
 
     # Serve the main chat interface
     @app.get("/", response_class=HTMLResponse)
     async def serve_chat_interface(request: Request):
         """Serve the main chat interface using Jinja2 template"""
+        from datetime import datetime
+        
         return templates.TemplateResponse("chat.html", {
             "request": request,
-            "title": "nbscribe - AI Jupyter Assistant",
+            "title": "nbscribe - Conversation Log",
             "service_name": "nbscribe",
-            "description": "AI-powered Jupyter Notebook assistant", 
             "version": "0.1.0",
-            "endpoints": {
-                "health": "/health",
-                "chat": "/api/chat", 
-                "info": "/api/info"
-            }
+            "conversation_id": "session_001",  # TODO: Generate unique session ID
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
 
     # API info endpoint
