@@ -67,16 +67,26 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML
     - [x] Responsive design for screen sharing with Jupyter
     - [x] Blinking dots loading indicator
     - [x] Auto-resizing textarea input
-- [ ] Enhance log format
-  - [ ] Timestamps for each message
-  - [ ] Code block syntax highlighting
-  - [ ] Message threading/context
+  - [x] **Markdown Rendering**
+    - [x] Client-side markdown parsing with marked.js
+    - [x] Lightweight custom CSS (GitHub-inspired, proper list spacing)
+    - [x] Raw markdown storage in HTML files (human readable)
+    - [x] Streaming-compatible rendering (render on completion)
+    - [x] Code syntax highlighting and formatting
+    - [x] Consistent rendering in live and archived conversations
 
 **Architecture Principle: File-First + Progressive Enhancement**
 - HTML files in `logs/conversations/` are the source of truth
 - URLs map directly to conversation files
 - JavaScript enhances UX but page refresh is always reliable
 - Local app performance makes this approach snappy
+
+**CSS Organization Convention:**
+- `/static/conversation.css`: All markdown and shared styles (self-contained, no CDN)
+- Live chat interface (`chat.html`): Layout CSS inline for self-contained document
+- Archived logs (`conversation_log.html`): Minimal template, external CSS only
+- Keep templates clean and avoid CSS duplication
+- Lightweight approach: custom CSS instead of heavy framework dependencies
 
 ### Notebook Integration (After Chat Log)
 - [ ] Create `notebook_editor.py`

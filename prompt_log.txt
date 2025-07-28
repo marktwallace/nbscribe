@@ -98,6 +98,12 @@ Lets make the UX better by streaming back the AI completions. Of course this sho
 Assistant:
 
 User:
+...
+Before I test this, tell me how it works.
+
+If I press "send" the jaascript on the page should send an AJAX request to the Python server, right? Then the Python server should construct a prompt for the AI, and send it to the OpenAI endpoint with langchain, right? The prompt should be derived from the conversation log. Is that the way it is working right now?
+
+So what part is streaming? Does the server make a request and then get the completion streamed back from OpenAI? Then does the Python server stream it bck to the Javascript on the page?
 
 Assistant:
 

@@ -1,3 +1,12 @@
+<!--
+    nbscribe Conversation Log Template
+    
+    NOTE: Keep this template clean and minimal!
+    - Use external CSS files instead of inline styles
+    - Only include archived-log-specific styles inline
+    - Markdown CSS is in /static/conversation.css
+    - Main layout CSS is shared via external files
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,9 +16,13 @@
     <meta name="generator" content="nbscribe {{ version | default('0.1.0') }}" />
     <meta name="conversation-id" content="{{ session_id }}" />
     <meta name="created" content="{{ created_at }}" />
-    <link rel="stylesheet" href="/static/conversation.css" />
+    
+    <!-- External CSS - keep template minimal and clean -->
+    <link rel="stylesheet" href="/static/conversation.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/5.1.1/marked.min.js"></script>
+    
     <style>
-        /* Override external CSS for archived logs */
+        /* Minimal archived log specific styles only */
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
             line-height: 1.6;
@@ -19,7 +32,6 @@
             padding: 0;
         }
         
-        /* Header for archived logs */
         .header {
             padding: 1rem 4%;
             border-bottom: 1px solid #e5e5e5;
@@ -52,20 +64,18 @@
             border-radius: 4px;
         }
         
-        /* Conversation area */
         .conversation {
             padding: 2rem 4%;
             min-height: 60vh;
         }
         
-        /* ChatGPT-style messages for archived logs */
+        /* ChatGPT-style archived messages */
         chat-msg {
             display: block;
             margin-bottom: 1.5rem;
             position: relative;
         }
         
-        /* User messages */
         chat-msg[role="user"] {
             max-width: 70%;
             margin-left: auto;
@@ -76,7 +86,6 @@
             border-bottom-right-radius: 4px;
         }
         
-        /* Assistant messages */
         chat-msg[role="assistant"] {
             width: 100%;
             padding: 1.5rem 0;
@@ -87,7 +96,6 @@
             padding-right: 4%;
         }
         
-        /* System messages */
         chat-msg[role="system"] {
             max-width: 60%;
             margin: 1rem auto;
@@ -99,10 +107,9 @@
             font-size: 0.9rem;
         }
         
-        /* Responsive adjustments */
+        /* Responsive */
         @media (max-width: 768px) {
-            .conversation,
-            .header {
+            .conversation, .header {
                 padding-left: 3%;
                 padding-right: 3%;
             }
@@ -137,5 +144,51 @@
         <chat-msg role="{{ message.role }}" timestamp="{{ message.timestamp }}">{{ message.content }}</chat-msg>
         {% endfor %}
     </main>
+    
+    <script>
+        // Render markdown in archived conversation logs
+        document.addEventListener('DOMContentLoaded', function() {
+            if (typeof marked !== 'undefined') {
+                // Configure marked for consistent rendering - more like ChatGPT
+                marked.setOptions({
+                    breaks: true,
+                    gfm: true,
+                    headerIds: false,
+                    mangle: false,
+                    pedantic: false,  // Don't be overly strict about markdown
+                    smartypants: false // Prevent smart quote conversion
+                });
+                
+                // Custom renderer to handle lists more like ChatGPT
+                const renderer = new marked.Renderer();
+                
+                // Override list item rendering to reduce paragraph wrapping
+                renderer.listitem = function(text) {
+                    // If the text is simple (no nested blocks), don't wrap in <p>
+                    if (!text.includes('<p>') && !text.includes('<blockquote>') && !text.includes('<pre>')) {
+                        return '<li>' + text.trim() + '</li>\n';
+                    }
+                    return '<li>' + text + '</li>\n';
+                };
+                
+                marked.setOptions({ renderer: renderer });
+                
+                // Render markdown in assistant messages
+                const assistantMessages = document.querySelectorAll('chat-msg[role="assistant"]');
+                assistantMessages.forEach(function(messageEl) {
+                    const rawContent = messageEl.textContent;
+                    if (rawContent.trim()) {
+                        try {
+                            const renderedHtml = marked.parse(rawContent);
+                            messageEl.innerHTML = '<div class="markdown-body">' + renderedHtml + '</div>';
+                        } catch (error) {
+                            console.warn('Markdown rendering failed:', error);
+                            // Keep original text content if rendering fails
+                        }
+                    }
+                });
+            }
+        });
+    </script>
 </body>
 </html> 

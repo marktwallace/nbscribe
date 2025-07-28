@@ -7,6 +7,11 @@
     <meta name="generator" content="nbscribe {{ version | default('0.1.0') }}">
     <meta name="conversation-id" content="{{ conversation_id | default('default') }}">
     <meta name="created" content="{{ created_at | default('') }}">
+    
+    <!-- Markdown rendering support -->
+    <link rel="stylesheet" href="/static/conversation.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/5.1.1/marked.min.js"></script>
+    
     <style>
         /* Reset and base styles */
         * {
@@ -269,8 +274,60 @@
                 // Extract session ID from page metadata
                 this.sessionId = document.querySelector('meta[name="conversation-id"]').getAttribute('content');
                 
+                this.initMarkdown();
                 this.initEventListeners();
+                this.renderExistingMarkdown(); // Render any existing messages
                 this.scrollToBottom(); // Scroll to bottom on page load
+            }
+            
+            initMarkdown() {
+                // Configure marked for consistent rendering - more like ChatGPT
+                if (typeof marked !== 'undefined') {
+                    marked.setOptions({
+                        breaks: true,
+                        gfm: true,
+                        headerIds: false,
+                        mangle: false,
+                        pedantic: false,  // Don't be overly strict about markdown
+                        smartypants: false // Prevent smart quote conversion
+                    });
+                    
+                    // Custom renderer to handle lists more like ChatGPT
+                    const renderer = new marked.Renderer();
+                    
+                    // Override list item rendering to reduce paragraph wrapping
+                    renderer.listitem = function(text) {
+                        // If the text is simple (no nested blocks), don't wrap in <p>
+                        if (!text.includes('<p>') && !text.includes('<blockquote>') && !text.includes('<pre>')) {
+                            return `<li>${text.trim()}</li>\n`;
+                        }
+                        return `<li>${text}</li>\n`;
+                    };
+                    
+                    marked.setOptions({ renderer: renderer });
+                }
+            }
+            
+            renderExistingMarkdown() {
+                // Render markdown in any existing assistant messages
+                const assistantMessages = this.chatHistory.querySelectorAll('chat-msg[role="assistant"]');
+                assistantMessages.forEach(msg => this.renderMessageMarkdown(msg));
+            }
+            
+            renderMessageMarkdown(messageElement) {
+                // Only render markdown for assistant messages
+                if (messageElement.getAttribute('role') !== 'assistant') return;
+                
+                const rawContent = messageElement.textContent;
+                if (typeof marked !== 'undefined' && rawContent.trim()) {
+                    try {
+                        const renderedHtml = marked.parse(rawContent);
+                        messageElement.innerHTML = `<div class="markdown-body">${renderedHtml}</div>`;
+                    } catch (error) {
+                        console.warn('Markdown rendering failed:', error);
+                        // Keep original text content if rendering fails
+                    }
+                }
             }
             
             initEventListeners() {
@@ -378,7 +435,8 @@
                                         messageEl.textContent += data.content;
                                         this.scrollToBottom();
                                     } else if (data.type === 'complete') {
-                                        // Streaming complete - file already saved on server
+                                        // Streaming complete - render markdown and file already saved on server
+                                        this.renderMessageMarkdown(messageEl);
                                         return true;
                                     } else if (data.type === 'error') {
                                         // Remove partial message and let fallback handle it
@@ -433,6 +491,12 @@
                 
                 // Insert before loading indicator
                 this.chatHistory.insertBefore(messageEl, this.loadingIndicator);
+                
+                // Render markdown for assistant messages
+                if (role === 'assistant') {
+                    this.renderMessageMarkdown(messageEl);
+                }
+                
                 this.scrollToBottom();
             }
             
