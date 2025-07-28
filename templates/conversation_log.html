@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ title | default("nbscribe - Conversation Log") }}</title>
+    <meta name="generator" content="nbscribe {{ version | default('0.1.0') }}" />
+    <meta name="conversation-id" content="{{ session_id }}" />
+    <meta name="created" content="{{ created_at }}" />
+    <link rel="stylesheet" href="/static/conversation.css" />
+</head>
+<body>
+    <div class="container">
+        <header class="conversation-header">
+            <h1>{{ service_name | default("nbscribe") }} - Conversation Log</h1>
+            <div class="conversation-meta">
+                <span>Session: {{ session_id }}</span>
+                <span>Started: {{ created_at }}</span>
+            </div>
+        </header>
+        
+        <div class="conversation">
+            {% for message in messages %}
+            <chat-msg role="{{ message.role }}" timestamp="{{ message.timestamp }}">{{ message.content }}</chat-msg>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html> 

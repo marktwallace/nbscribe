@@ -79,6 +79,37 @@ OK, this is working as expected now. I want to clear some cruft before moving to
 Assistant:
 
 User:
+...
+OK, I agree with your conclusion. I have suggestions for readabilty. Can the document still be valid xhtml if we use more natural and compact element names, like:
+<msg role="User">
+   -- content here --
+</msg>
+I do not actually remember how flexible xhtml is, but I would like brevity and readablity if we can get w/o too much hacking.
+
+Assistant:
+
+User:
+
+...
+OK, bookmarks and browser history are working. I like the session_id with the date-time in it. The file size is good and the file is readable. The greeting refreshes as expected. The session id works to retrieve any conversataion in the log, which is great. Everything is super fast.
+
+Lets make the UX better by streaming back the AI completions. Of course this should not break anything with session continuity, but I do expect that a refresh will stop the streaming. When the reponse is complte it should update the logfile. I could see a potential UX hiccup is user refresh while they are waiting for AI reponses. We could either say "don't do that" or maybe be reallt clever somehow, but I want the code to stay relatively simple.
+
+Assistant:
+
+User:
+
+Assistant:
+
+User:
+
+Assistant:
+
+User:
+
+Assistant:
+
+User:
 
 Assistant:
 

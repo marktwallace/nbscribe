@@ -1,7 +1,7 @@
 # nbscribe - Project Plan & Tasks
 
 ## Overview
-AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and XHTML chat interface.
+AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML chat interface.
 
 ## Phase 1: Proof of Concept
 *Goal: Get basic functionality working to start learning and iterating*
@@ -11,7 +11,7 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and XHTM
   - [x] Static file serving
   - [x] Basic REST endpoints
   - [x] Health check endpoint
-- [x] Create minimal XHTML chat interface
+- [x] Create minimal HTML chat interface
   - [x] Basic HTML structure
   - [x] Simple CSS styling
   - [x] JavaScript for form submission
@@ -30,18 +30,46 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and XHTM
   - [x] Basic error handling
 
 ### Chat Log System (Priority)
-- [x] Design live XHTML conversation log format
+- [x] Design live HTML conversation log format
   - [x] Self-contained document with embedded CSS/JS
-  - [x] Conversation metadata (session ID, timestamps)
+  - [x] Conversation metadata (session ID, timestamps)  
   - [x] Clean message structure for tight logging
-- [ ] Implement XHTML log persistence
-  - [ ] Save conversation as standalone XHTML file
-  - [ ] Load existing conversation log on startup
-  - [ ] Parse XHTML to extract conversation context
+  - [x] Implement `<chat-msg>` custom elements with semantic CSS
+- [x] Implement HTML parsing for conversation context
+  - [x] Create conversation parser module
+  - [x] Extract messages from `<chat-msg>` elements
+  - [x] Format context for LLM input
+- [x] **File-First Architecture Implementation**
+  - [x] HTML file as canonical source of truth
+  - [x] Page refresh always works smoothly
+  - [x] Session-based file management
+- [x] **Session Routing (Hybrid Option D)**
+  - [x] `http://localhost:5317/` → Latest session or new
+  - [x] `http://localhost:5317/session/ID` → Specific session
+  - [x] `http://localhost:5317/new` → Force new session
+  - [x] Auto-redirect logic for session continuity
+- [x] Implement HTML log persistence
+  - [x] Save conversation as standalone HTML file after each message
+  - [x] Load existing conversation log on startup/session load
+  - [x] Session file naming: `YYYYMMDD_HHMMSS_mmm` format
+  - [x] External CSS to eliminate duplication
+  - [x] Initial greeting message persistence
+- [x] **Progressive Enhancement (Future UX)**
+  - [x] JavaScript optimizations for latency (streaming responses)
+  - [x] DOM updates without page refresh (when beneficial)
+  - [x] Fallback: Page refresh always works
+  - [x] Streaming with Server-Sent Events (SSE)
+  - [x] Auto-fallback to regular endpoint if streaming fails
 - [ ] Enhance log format
   - [ ] Timestamps for each message
   - [ ] Code block syntax highlighting
   - [ ] Message threading/context
+
+**Architecture Principle: File-First + Progressive Enhancement**
+- HTML files in `logs/conversations/` are the source of truth
+- URLs map directly to conversation files
+- JavaScript enhances UX but page refresh is always reliable
+- Local app performance makes this approach snappy
 
 ### Notebook Integration (After Chat Log)
 - [ ] Create `notebook_editor.py`
@@ -59,7 +87,7 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and XHTM
 - [x] Prompt system (`prompts/` folder)
 - [ ] Better UI/UX
 - [ ] **Conversation Memory & Rolling**
-  - [ ] XHTML conversation log as context source
+  - [ ] HTML conversation log as context source
   - [ ] Log rolling to archive directory with summarization
   - [ ] Project memories (explicit, user-visible files)
 - [ ] Jupyter integration improvements

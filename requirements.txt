@@ -6,4 +6,5 @@ python-multipart
 openai
 python-dotenv
 langchain
-langchain-openai 
+langchain-openai
+beautifulsoup4 

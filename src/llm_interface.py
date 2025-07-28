@@ -103,7 +103,7 @@ class LLMInterface:
         
         Args:
             user_message: The user's message
-            conversation_context: Optional conversation history (from XHTML log)
+            conversation_context: Optional conversation history (from HTML log)
             
         Returns:
             The LLM's response as a string
@@ -116,19 +116,7 @@ class LLMInterface:
                 raise RuntimeError("LLM client not initialized")
             
             # Build messages - no hidden state, everything explicit
-            messages = []
-            
-            # Add system prompt
-            if self.system_prompt:
-                messages.append(SystemMessage(content=self.system_prompt))
-            
-            # Add conversation context if provided
-            if conversation_context:
-                context_message = f"Previous conversation context:\n{conversation_context}\n\n"
-                messages.append(SystemMessage(content=context_message))
-            
-            # Add current user message
-            messages.append(HumanMessage(content=user_message))
+            messages = self._build_messages(user_message, conversation_context)
             
             logger.info(f"Sending request to {self.model_name}")
             logger.debug(f"User message: {user_message}")
@@ -149,6 +137,67 @@ class LLMInterface:
             logger.error(f"Model: {self.model_name}")
             logger.error(traceback.format_exc())
             raise
+
+    def generate_response_stream(self, user_message: str, conversation_context: Optional[str] = None):
+        """
+        Generate a streaming response using the LLM.
+        Yields chunks as they arrive from the LLM.
+        
+        Args:
+            user_message: The user's message
+            conversation_context: Optional conversation history (from HTML log)
+            
+        Yields:
+            String chunks of the response as they arrive
+            
+        Raises:
+            Exception: If the LLM call fails (fail early principle)
+        """
+        try:
+            if not self.client:
+                raise RuntimeError("LLM client not initialized")
+            
+            # Build messages - no hidden state, everything explicit
+            messages = self._build_messages(user_message, conversation_context)
+            
+            logger.info(f"Sending streaming request to {self.model_name}")
+            logger.debug(f"User message: {user_message}")
+            
+            # Make the streaming API call
+            for chunk in self.client.stream(messages):
+                if chunk.content:
+                    yield chunk.content
+            
+            logger.info(f"Completed streaming response")
+            
+        except Exception as e:
+            # Fail early and often - complete error logging with stack traces
+            logger.error(f"LLM streaming failed: {e}")
+            logger.error(f"User message: {user_message}")
+            logger.error(f"Model: {self.model_name}")
+            logger.error(traceback.format_exc())
+            raise
+
+    def _build_messages(self, user_message: str, conversation_context: Optional[str] = None):
+        """
+        Build message list for LLM calls.
+        Extracted into helper method to avoid duplication between streaming and regular calls.
+        """
+        messages = []
+        
+        # Add system prompt
+        if self.system_prompt:
+            messages.append(SystemMessage(content=self.system_prompt))
+        
+        # Add conversation context if provided
+        if conversation_context:
+            context_message = f"Previous conversation context:\n{conversation_context}\n\n"
+            messages.append(SystemMessage(content=context_message))
+        
+        # Add current user message
+        messages.append(HumanMessage(content=user_message))
+        
+        return messages
     
     def reload_prompt(self, prompt_file: str = "main.txt"):
         """
