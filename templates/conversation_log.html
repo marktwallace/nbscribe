@@ -8,22 +8,134 @@
     <meta name="conversation-id" content="{{ session_id }}" />
     <meta name="created" content="{{ created_at }}" />
     <link rel="stylesheet" href="/static/conversation.css" />
+    <style>
+        /* Override external CSS for archived logs */
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #ffffff;
+            margin: 0;
+            padding: 0;
+        }
+        
+        /* Header for archived logs */
+        .header {
+            padding: 1rem 4%;
+            border-bottom: 1px solid #e5e5e5;
+            background: #f8f9fa;
+        }
+        
+        .header h1 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #333;
+            margin: 0 0 0.25rem 0;
+        }
+        
+        .session-info {
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .session-info span {
+            margin-right: 1.5rem;
+        }
+        
+        .archive-notice {
+            background: #fffbeb;
+            border: 1px solid #fbbf24;
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+            color: #92400e;
+            margin-top: 0.5rem;
+            border-radius: 4px;
+        }
+        
+        /* Conversation area */
+        .conversation {
+            padding: 2rem 4%;
+            min-height: 60vh;
+        }
+        
+        /* ChatGPT-style messages for archived logs */
+        chat-msg {
+            display: block;
+            margin-bottom: 1.5rem;
+            position: relative;
+        }
+        
+        /* User messages */
+        chat-msg[role="user"] {
+            max-width: 70%;
+            margin-left: auto;
+            margin-right: 0;
+            padding: 1rem 1.5rem;
+            background: #f7f7f8;
+            border-radius: 18px;
+            border-bottom-right-radius: 4px;
+        }
+        
+        /* Assistant messages */
+        chat-msg[role="assistant"] {
+            width: 100%;
+            padding: 1.5rem 0;
+            background: #ffffff;
+            margin-left: -4%;
+            margin-right: -4%;
+            padding-left: 4%;
+            padding-right: 4%;
+        }
+        
+        /* System messages */
+        chat-msg[role="system"] {
+            max-width: 60%;
+            margin: 1rem auto;
+            padding: 0.75rem 1rem;
+            background: #fff3cd;
+            border-radius: 8px;
+            font-style: italic;
+            text-align: center;
+            font-size: 0.9rem;
+        }
+        
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .conversation,
+            .header {
+                padding-left: 3%;
+                padding-right: 3%;
+            }
+            
+            chat-msg[role="assistant"] {
+                margin-left: -3%;
+                margin-right: -3%;
+                padding-left: 3%;
+                padding-right: 3%;
+            }
+            
+            chat-msg[role="user"] {
+                max-width: 85%;
+            }
+        }
+    </style>
 </head>
 <body>
-    <div class="container">
-        <header class="conversation-header">
-            <h1>{{ service_name | default("nbscribe") }} - Conversation Log</h1>
-            <div class="conversation-meta">
-                <span>Session: {{ session_id }}</span>
-                <span>Started: {{ created_at }}</span>
-            </div>
-        </header>
-        
-        <div class="conversation">
-            {% for message in messages %}
-            <chat-msg role="{{ message.role }}" timestamp="{{ message.timestamp }}">{{ message.content }}</chat-msg>
-            {% endfor %}
+    <header class="header">
+        <h1>{{ service_name | default("nbscribe") }}</h1>
+        <div class="session-info">
+            <span>Session {{ session_id }}</span>
+            <span>{{ created_at }}</span>
         </div>
-    </div>
+        <div class="archive-notice">
+            📄 Archived conversation log - Read-only
+        </div>
+    </header>
+    
+    <main class="conversation">
+        {% for message in messages %}
+        <chat-msg role="{{ message.role }}" timestamp="{{ message.timestamp }}">{{ message.content }}</chat-msg>
+        {% endfor %}
+    </main>
 </body>
 </html> 

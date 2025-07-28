@@ -60,6 +60,13 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML
   - [x] Fallback: Page refresh always works
   - [x] Streaming with Server-Sent Events (SSE)
   - [x] Auto-fallback to regular endpoint if streaming fails
+  - [x] **Professional Document-Style Interface**
+    - [x] ChatGPT-style message layout (user indented, assistant full-width)
+    - [x] Natural browser scrolling (no embedded scroll areas)
+    - [x] Full-width design for technical content review
+    - [x] Responsive design for screen sharing with Jupyter
+    - [x] Blinking dots loading indicator
+    - [x] Auto-resizing textarea input
 - [ ] Enhance log format
   - [ ] Timestamps for each message
   - [ ] Code block syntax highlighting
