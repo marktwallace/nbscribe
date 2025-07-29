@@ -14,6 +14,8 @@ import time
 import logging
 import signal
 import os
+import threading
+import queue
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +31,79 @@ class NotebookServerManager:
         self.process: Optional[subprocess.Popen] = None
         self.base_url = "/jupyter"
         
+        # Log capture
+        self.stdout_lines = queue.Queue(maxsize=1000)
+        self.stderr_lines = queue.Queue(maxsize=1000)
+        self._log_threads = []
+        
+    def _log_reader(self, pipe, log_queue, prefix):
+        """Read from subprocess pipe and store in queue"""
+        try:
+            for line in iter(pipe.readline, ''):
+                if line:
+                    line = line.strip()
+                    # Log to console as well with immediate flush
+                    print(f"[Jupyter {prefix}] {line}", flush=True)
+                    logger.info(f"[Jupyter {prefix}] {line}")
+                    # Store in queue (remove oldest if full)
+                    try:
+                        log_queue.put_nowait(line)
+                    except queue.Full:
+                        # Remove oldest entry and add new one
+                        try:
+                            log_queue.get_nowait()
+                            log_queue.put_nowait(line)
+                        except queue.Empty:
+                            pass
+        except Exception as e:
+            logger.error(f"Error reading {prefix} logs: {e}")
+        finally:
+            pipe.close()
+            
+    def get_recent_logs(self, lines: int = 50) -> dict:
+        """Get recent stdout and stderr logs"""
+        stdout_logs = []
+        stderr_logs = []
+        
+        # Get stdout logs
+        temp_queue = queue.Queue()
+        while not self.stdout_lines.empty():
+            try:
+                line = self.stdout_lines.get_nowait()
+                stdout_logs.append(line)
+                temp_queue.put(line)
+            except queue.Empty:
+                break
+        
+        # Put them back
+        while not temp_queue.empty():
+            try:
+                self.stdout_lines.put_nowait(temp_queue.get_nowait())
+            except queue.Full:
+                break
+                
+        # Get stderr logs  
+        temp_queue = queue.Queue()
+        while not self.stderr_lines.empty():
+            try:
+                line = self.stderr_lines.get_nowait()
+                stderr_logs.append(line)
+                temp_queue.put(line)
+            except queue.Empty:
+                break
+                
+        # Put them back
+        while not temp_queue.empty():
+            try:
+                self.stderr_lines.put_nowait(temp_queue.get_nowait())
+            except queue.Full:
+                break
+        
+        return {
+            "stdout": stdout_logs[-lines:] if stdout_logs else [],
+            "stderr": stderr_logs[-lines:] if stderr_logs else []
+        }
+
     def find_free_port(self, start_port: int) -> int:
         """Find a free port starting from start_port"""
         port = start_port
@@ -54,18 +129,21 @@ class NotebookServerManager:
         if notebook_dir is None:
             notebook_dir = Path.cwd()
         
-        # Build command
+        # Build command - minimal configuration for AI-assisted editing
         cmd = [
             "jupyter", "notebook",
-            f"--NotebookApp.token={self.token}",
-            "--NotebookApp.password=''",
-            f"--NotebookApp.base_url={self.base_url}",
+            f"--ServerApp.token={self.token}",
+            "--ServerApp.password=''",
+            f"--ServerApp.base_url={self.base_url}",
             "--no-browser",
             f"--port={self.port}",
             f"--notebook-dir={notebook_dir}",
-            "--NotebookApp.allow_origin='*'",  # Allow CORS for iframe
-            "--NotebookApp.disable_check_xsrf=True",  # Disable XSRF for API calls
-            "--NotebookApp.tornado_settings={'headers': {'X-Frame-Options': 'ALLOWALL'}}"  # Allow iframe embedding
+            "--ServerApp.allow_origin='*'",  # Allow CORS for iframe
+            "--ServerApp.disable_check_xsrf=True",  # Disable XSRF for API calls
+            "--ServerApp.tornado_settings={'headers': {'X-Frame-Options': 'ALLOWALL'}}",  # Allow iframe embedding
+            
+            # Optimal minimal configuration - eliminates noise while preserving functionality
+            "--ServerApp.terminals_enabled=False",  # Eliminates /api/terminals polling + WebSocket errors
         ]
         
         logger.info(f"Starting Jupyter Notebook on port {self.port}")
@@ -80,6 +158,22 @@ class NotebookServerManager:
             env=dict(os.environ, JUPYTER_CONFIG_DIR=str(Path.home() / ".jupyter"))
         )
         
+        # Start log reading threads
+        stdout_thread = threading.Thread(
+            target=self._log_reader, 
+            args=(self.process.stdout, self.stdout_lines, "stdout"),
+            daemon=True
+        )
+        stderr_thread = threading.Thread(
+            target=self._log_reader, 
+            args=(self.process.stderr, self.stderr_lines, "stderr"),
+            daemon=True
+        )
+        
+        stdout_thread.start()
+        stderr_thread.start()
+        self._log_threads = [stdout_thread, stderr_thread]
+        
         # Wait for server to start
         self._wait_for_startup()
         
@@ -90,9 +184,14 @@ class NotebookServerManager:
         start_time = time.time()
         while time.time() - start_time < timeout:
             if self.process and self.process.poll() is not None:
-                # Process died
-                stdout, stderr = self.process.communicate()
-                raise RuntimeError(f"Jupyter server failed to start:\nSTDOUT: {stdout}\nSTDERR: {stderr}")
+                # Process died - show logs
+                logs = self.get_recent_logs()
+                error_msg = f"Jupyter server failed to start:\n"
+                if logs["stdout"]:
+                    error_msg += f"STDOUT:\n" + "\n".join(logs["stdout"]) + "\n"
+                if logs["stderr"]:
+                    error_msg += f"STDERR:\n" + "\n".join(logs["stderr"]) + "\n"
+                raise RuntimeError(error_msg)
                 
             try:
                 # Try to connect to the server

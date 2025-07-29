@@ -7,4 +7,5 @@ openai
 python-dotenv
 langchain
 langchain-openai
-beautifulsoup4 
+beautifulsoup4
+websockets 

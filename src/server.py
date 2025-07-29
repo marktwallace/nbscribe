@@ -4,7 +4,7 @@ nbscribe FastAPI Server
 Lightweight server for AI-powered Jupyter notebook assistance
 """
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
@@ -18,21 +18,32 @@ from datetime import datetime
 import json
 import logging
 
-# Custom logging filter to reduce WebSocket noise
-class WebSocketFilter(logging.Filter):
+# Surgical log filter - suppress only the identified repetitive polling patterns
+class JupyterRepetitiveFilter(logging.Filter):
+    """Suppress only the specific repetitive Jupyter polling we've identified"""
     def filter(self, record):
-        # Suppress WebSocket 403 errors from Jupyter
         if hasattr(record, 'getMessage'):
             message = record.getMessage()
-            if 'WebSocket /jupyter/api/events/subscribe" 403' in message:
-                return False
-            if 'connection rejected (403 Forbidden)' in message:
-                return False
+            
+            # Only suppress these specific repetitive patterns
+            repetitive_patterns = [
+                '/checkpoints?',                    # Checkpoint polling every 2s
+                '/contents?content=1&hash=0&',      # File system monitoring  
+                '/kernels?',                        # Kernel status polling
+                '/sessions?',                       # Session status polling
+                '/kernelspecs?',                    # Kernel specs polling
+                '/me?',                             # User info polling
+            ]
+            
+            # Suppress if it's a GET request matching these patterns
+            if 'GET /jupyter/api/' in message:
+                if any(pattern in message for pattern in repetitive_patterns):
+                    return False
+                    
         return True
 
-# Apply filter to uvicorn access logger
-uvicorn_logger = logging.getLogger("uvicorn.access")
-uvicorn_logger.addFilter(WebSocketFilter())
+# Apply surgical filter to suppress only identified noise
+logging.getLogger("uvicorn.access").addFilter(JupyterRepetitiveFilter())
 
 def create_app():
     """Factory function to create FastAPI app"""
@@ -534,6 +545,19 @@ def create_app():
             "url": notebook_manager.get_token_url() if notebook_manager.is_running() else None
         })
     
+    @app.get("/api/notebook/logs")
+    async def notebook_server_logs(lines: int = 50):
+        """Get recent Jupyter server logs"""
+        if not notebook_manager.is_running():
+            raise HTTPException(status_code=503, detail="Jupyter server not running")
+        
+        logs = notebook_manager.get_recent_logs(lines)
+        return JSONResponse({
+            "stdout": logs["stdout"],
+            "stderr": logs["stderr"],
+            "total_lines": len(logs["stdout"]) + len(logs["stderr"])
+        })
+    
     @app.post("/api/notebooks/create")
     async def create_notebook(request: CreateNotebookRequest):
         """Create a new Jupyter notebook"""
@@ -605,6 +629,171 @@ def create_app():
             logging.error(f"Error applying directive: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
+    # WebSocket proxy endpoints - forward to actual Jupyter server
+    @app.websocket("/jupyter/api/events/subscribe")
+    async def jupyter_events_websocket(websocket: WebSocket):
+        """Proxy WebSocket for Jupyter event subscriptions"""
+        if not notebook_manager.is_running():
+            await websocket.close(code=1011, reason="Jupyter server not running")
+            return
+            
+        target_url = f"ws://localhost:{notebook_manager.port}/jupyter/api/events/subscribe"
+        
+        upstream = None
+        try:
+            import websockets
+            import asyncio
+            
+            await websocket.accept()
+            
+            # Connect to upstream Jupyter server
+            upstream = await websockets.connect(f"{target_url}?token={notebook_manager.token}")
+            
+            # Track connection state
+            client_closed = asyncio.Event()
+            upstream_closed = asyncio.Event()
+            
+            async def forward_to_upstream():
+                try:
+                    while not client_closed.is_set() and not upstream_closed.is_set():
+                        message = await websocket.receive_text()
+                        if not upstream_closed.is_set():
+                            await upstream.send(message)
+                except WebSocketDisconnect:
+                    client_closed.set()
+                except websockets.exceptions.ConnectionClosed:
+                    upstream_closed.set()
+                except Exception as e:
+                    logging.error(f"Events forward to upstream error: {e}")
+                    client_closed.set()
+                    upstream_closed.set()
+            
+            async def forward_to_client():
+                try:
+                    async for message in upstream:
+                        if not client_closed.is_set():
+                            try:
+                                await websocket.send_text(message)
+                            except Exception:
+                                # Client disconnected while sending
+                                client_closed.set()
+                                break
+                except websockets.exceptions.ConnectionClosed:
+                    upstream_closed.set()
+                except Exception as e:
+                    logging.error(f"Events forward to client error: {e}")
+                    upstream_closed.set()
+            
+            # Run both forwarding tasks with proper cleanup
+            await asyncio.gather(
+                forward_to_upstream(), 
+                forward_to_client(),
+                return_exceptions=True
+            )
+                
+        except Exception as e:
+            logging.error(f"Events WebSocket proxy error: {e}")
+        finally:
+            # Clean up connections
+            if upstream and not upstream.closed:
+                try:
+                    await upstream.close()
+                except Exception:
+                    pass
+            
+            # Only close websocket if not already closed
+            try:
+                if websocket.client_state.name != "DISCONNECTED":
+                    await websocket.close()
+            except Exception:
+                pass
+    
+    @app.websocket("/jupyter/api/kernels/{kernel_id}/channels")
+    async def jupyter_kernel_websocket(websocket: WebSocket, kernel_id: str):
+        """Proxy WebSocket for Jupyter kernel channels - this is crucial for cell execution"""
+        if not notebook_manager.is_running():
+            await websocket.close(code=1011, reason="Jupyter server not running")
+            return
+            
+        # Get query parameters (especially session_id)
+        query_params = dict(websocket.query_params)
+        query_string = "&".join([f"{k}={v}" for k, v in query_params.items()])
+        if "token" not in query_params:
+            query_string += f"&token={notebook_manager.token}"
+        
+        target_url = f"ws://localhost:{notebook_manager.port}/jupyter/api/kernels/{kernel_id}/channels"
+        if query_string:
+            target_url += f"?{query_string}"
+        
+        upstream = None
+        try:
+            import websockets
+            import asyncio
+            
+            await websocket.accept()
+            
+            # Connect to upstream Jupyter server
+            upstream = await websockets.connect(target_url)
+            
+            # Track connection state
+            client_closed = asyncio.Event()
+            upstream_closed = asyncio.Event()
+            
+            async def forward_to_upstream():
+                try:
+                    while not client_closed.is_set() and not upstream_closed.is_set():
+                        message = await websocket.receive_text()
+                        if not upstream_closed.is_set():
+                            await upstream.send(message)
+                except WebSocketDisconnect:
+                    client_closed.set()
+                except websockets.exceptions.ConnectionClosed:
+                    upstream_closed.set()
+                except Exception as e:
+                    logging.error(f"Forward to upstream error: {e}")
+                    client_closed.set()
+                    upstream_closed.set()
+            
+            async def forward_to_client():
+                try:
+                    async for message in upstream:
+                        if not client_closed.is_set():
+                            try:
+                                await websocket.send_text(message)
+                            except Exception:
+                                # Client disconnected while sending
+                                client_closed.set()
+                                break
+                except websockets.exceptions.ConnectionClosed:
+                    upstream_closed.set()
+                except Exception as e:
+                    logging.error(f"Forward to client error: {e}")
+                    upstream_closed.set()
+            
+            # Run both forwarding tasks with proper cleanup
+            await asyncio.gather(
+                forward_to_upstream(), 
+                forward_to_client(),
+                return_exceptions=True
+            )
+                
+        except Exception as e:
+            logging.error(f"Kernel WebSocket proxy error: {e}")
+        finally:
+            # Clean up connections
+            if upstream and not upstream.closed:
+                try:
+                    await upstream.close()
+                except Exception:
+                    pass
+            
+            # Only close websocket if not already closed
+            try:
+                if websocket.client_state.name != "DISCONNECTED":
+                    await websocket.close()
+            except Exception:
+                pass
+    
     # App lifecycle events
     @app.on_event("startup")
     async def startup_event():
@@ -633,7 +822,6 @@ def run_server(host="0.0.0.0", port=5317, reload=True):
     """Run the FastAPI server"""
     print(f"🚀 Starting nbscribe server on port {port}")
     print(f"📖 Open http://localhost:{port} in your browser")
-    print(f"💡 Note: WebSocket 403 errors from Jupyter are normal (real-time updates disabled)")
     
     uvicorn.run(
         "src.server:create_app",

@@ -211,15 +211,26 @@ Error handling: What if TOOL directive is malformed? Show buttons anyway or igno
 
 User:
 Answers:
-1. Let's remove extra stuff unless it is really needed bythe AI or human, so we will drop **Cell Edit Proposal**
+1. Let's remove extra stuff unless it is really needed by the AI or human, so we will drop **Cell Edit Proposal**
 I would go farther, and remove all the leading > characters, too. They made sense when we were discussing it, to avoid mixing up markdown editors, but I think they would just confuse the AI to try and emit those leading characters before each line of python code.
 2. Let's support CELL_ID, too. I am not sure which will be easier for the AI agent, and we can try system prompt with either convention.
 3. To be clear: the TOOL directive should be immeaditely below the code block, not above. So when a code block, python or markup, is encountered, the line right after should be TOOL.
 4. Malformed directive is an interesting problem. Better to squawk about it actually, because the system prompt needs to be clear about it, and an LLM that cannot handle it reliably is probably not approriate for use with nbscribe.
 
 Assistant:
+...
+❓ Key Questions:
+Terminals: Do we want users to have browser terminal access, or should they use system terminal?
+File watching: Should Jupyter auto-reload if files change externally, or do we control all changes?
+Multiple kernels: Should users be able to run multiple notebooks simultaneously, or one at a time?
+Kernel lifecycle: Should kernels stay alive between notebook sessions, or restart fresh each time?
 
 User:
+Answers:
+1. The philosophy of this project is to do everything in the open, no hidden state, and both the human and the AI see the complete record. At the moment, I cannot think of an elegant way to include a full featured terminal from that POV -- we could spend all our project effort on giving the AI reasonable visiblity into a terminal and still not solve a problem that big.
+2. For the puposes of this project, only the user in Jupyter modifying the file, and the AI only reads an modifies the file as part of a completion cycle initiated by the user: when the user submits, the AI reads the .ipynb and then modifies it once when the completion comes back from the AI. So the AI's edits happen at a ompletely predicatble time. So no watching, afaict.
+3. One at a time.
+4. Restart fresh. The AI needs to see what is happening and won't remember where they left it the way a human would.
 
 Assistant:
 

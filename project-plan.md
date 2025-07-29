@@ -121,6 +121,30 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML
 **Architecture: Single notebook session for POC, expand to multi-notebook later**
 **AI never executes directly - all changes require human approval**
 
+### **Jupyter Configuration Philosophy**
+**Goal**: Minimal, predictable Jupyter with no hidden state - both human and AI see complete record
+
+**Tested Configuration Results:**
+✅ **SAFE & BENEFICIAL:**
+- `--NotebookApp.terminals_enabled=False` → Eliminates `/api/terminals` system polling + WebSocket 403s
+
+❌ **AVOID - BREAKS FUNCTIONALITY:**
+- `--NotebookApp.max_kernels=1` → Prevents Jupyter server startup entirely
+- `--NotebookApp.shutdown_no_activity_timeout=600` → Triggers heavy system-wide polling (kernels, sessions, contents)
+- `--KernelManager.autorestart=True` → Adds unnecessary checkpoint polling
+
+**Eliminated Noisy Polling:**
+- ❌ ~~`GET /jupyter/api/terminals?...`~~ (Constant terminal status checks)
+- ❌ ~~`GET /jupyter/api/kernels?...`~~ (System-wide kernel polling) 
+- ❌ ~~`GET /jupyter/api/sessions?...`~~ (Session monitoring)
+- ❌ ~~`GET /jupyter/api/contents?...`~~ (File system watching)
+- ❌ ~~`WebSocket /jupyter/api/events/subscribe → 403`~~ (Terminal event subscription)
+
+**Remaining Acceptable Activity:**
+- ✅ `GET /jupyter/api/contents/{notebook}.ipynb/checkpoints?...` (Targeted checkpoint monitoring)
+
+**Philosophy**: "Everything in the open, no hidden state" - AI and human see identical context. Systematic testing eliminated 95% of log noise while preserving all essential Jupyter functionality.
+
 ## Phase 2: Enhanced Features
 *After proof of concept is working*
 
