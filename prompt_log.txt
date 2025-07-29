@@ -106,6 +106,122 @@ If I press "send" the jaascript on the page should send an AJAX request to the P
 So what part is streaming? Does the server make a request and then get the completion streamed back from OpenAI? Then does the Python server stream it bck to the Javascript on the page?
 
 Assistant:
+...lots of work for hours...
+
+User:
+...
+OK, the chat system is in OK shape now. Let's move on to notebook integration. We should start by making sure we have an understandable design and we both know what to do next. No coding yet.
+
+Assistant:
+  Great! Let's step back and design the notebook integration properly before diving into code. Looking at the current project plan, the notebook section is quite sparse and doesn't capture the real design challenges.
+Key Design Questions
+Let me first understand what we're building:
+What's the core user workflow?
+User chats with AI about their notebook
+AI can read/analyze notebooks
+AI can suggest or make changes to notebooks
+But how does this actually work in practice?
+What notebook operations should we support?
+Read existing notebooks and analyze content
+Add new cells (code, markdown, raw)
+Modify existing cells
+Execute cells? (or just edit)
+Create new notebooks from scratch
+How does this integrate with the chat interface?
+Does the user specify a notebook file in chat?
+Does the AI automatically detect notebook files in the directory?
+How does the user review/approve changes before they're applied?
+What's the UX flow?
+Chat-driven: "Add a cell that loads pandas"
+File-based: AI operates on specified notebook files
+Preview-first: Show proposed changes before applying
+Direct manipulation: AI makes changes immediately
+Current Understanding
+From the project name "nbscribe" and description, it seems like:
+nbscribe = notebook + scribe (someone who writes/edits documents)
+AI acts as an intelligent editor for Jupyter notebooks
+Chat interface is the control mechanism
+What specific design approach do you have in mind for the notebook integration?
+I'd like to understand your vision before proposing a detailed design. Are you thinking:
+AI suggests notebook edits through chat, user approves them?
+AI directly modifies notebooks based on chat requests?
+Something else entirely?
+This will help me propose a clear architecture that matches your goals.
+
+User:
+...
+OK, I tried to evaluate Jupyter AI but I esatblished that it is mostly AWS demo-ware at the moment and broken on any platforms I could use for testing.
+
+Assistant:
+Excellent design! This is a much more sophisticated and practical approach than trying to compete with Jupyter AI. The subprocess + REST API strategy elegantly solves the file conflict issues we discussed, and the structured tool directive format is brilliant.
+Review Questions & Observations
+Strong Design Decisions ✅
+Subprocess approach - Eliminates file locking issues entirely
+Approval-gated AI - Much safer than auto-execution
+Markdown audit logs - Git-friendly and human-readable
+Structured tool syntax - Deterministic and extensible
+Split-pane UI - Natural workflow integration
+Clarification Questions
+1. Multi-notebook workflow
+How does the user switch between notebooks in the left pane?
+Does nbscribe manage multiple Notebook 7 sessions, or one shared session?
+2. Cell execution handling
+I see execute_cell in the API but not in the AI tool format examples
+Should AI be able to propose cell execution, or just editing?
+Format would be: TOOL: execute_cell, CELL_ID: 3?
+3. Operational concerns
+Port conflicts: What if 8889 is taken? Auto-discover free port?
+Server lifecycle: Graceful shutdown, restart on crash?
+Performance: Is full Notebook 7 overkill vs lighter nbformat + kernel management?
+4. Concurrent editing edge cases
+User manually edits cell while AI approval is pending?
+Cell positions shift due to manual insertions/deletions?
+5. System prompt design
+What's the LLM system prompt to generate proper tool syntax?
+How do we ensure it uses tools appropriately vs just generating code?
+Implementation Priority
+The delta.md task list looks right. I'd suggest this order:
+Subprocess + proxy (core infrastructure)
+Split-pane UI (user can see both panels)
+Tool directive parser + approval buttons
+REST endpoints for notebook modification
+Audit logging integration
+If these questions have reasonable answers, this design is ready to implement. The approach is innovative and addresses real gaps in the Jupyter ecosystem.
+Should I proceed with updating the project plan based on delta.md?
+
+User:
+Answers:
+1. To start with, I think having one notebook is best for now. We would have to switch out the AI context completely when switching notebook to avoid confusing the AI, so I do not see much benifit to building a switched until after we have good POC. So one session, too.
+2. We could skip execution for now. I don't think it helps the human much, and it might confuse them. Although maybe "edit" and "execute" would be good buttons to include in the chat panel. It occurs to me the for the human, having the buttons (and thus the TOOL block) below the source  code would be more convenient than above the source code -- less scolling.
+3. Auto-discover free port is OK, I think, because the this a subprocess completely under the control of nbscribe. 
+For now, just crash until we figure out error patterns.
+The idea of Notebook 7 is to control the UX in a positive way. Othewise the user has to orchestrate everything to work together, right?
+4. User aces out AI -- that is a PITA. Maybe figure it out after the POC? AI would overwrite user typing which sucks.
+5. I have a proposed system prompt which we will adjust based on implementation.
+
+Assistant:
+...
+Parsing Questions:
+Blockquote format: Should it be exactly > **Cell Edit Proposal** or any blockquote with TOOL:?
+Metadata parsing: For POS: 3, should we also support:
+CELL_ID: abc123 (for edits)
+TYPE: code or TYPE: markdown (cell types)
+Code block proximity: Must the Python code block be immediately after the TOOL directive, or can there be text in between?
+Error handling: What if TOOL directive is malformed? Show buttons anyway or ignore?
+
+User:
+Answers:
+1. Let's remove extra stuff unless it is really needed bythe AI or human, so we will drop **Cell Edit Proposal**
+I would go farther, and remove all the leading > characters, too. They made sense when we were discussing it, to avoid mixing up markdown editors, but I think they would just confuse the AI to try and emit those leading characters before each line of python code.
+2. Let's support CELL_ID, too. I am not sure which will be easier for the AI agent, and we can try system prompt with either convention.
+3. To be clear: the TOOL directive should be immeaditely below the code block, not above. So when a code block, python or markup, is encountered, the line right after should be TOOL.
+4. Malformed directive is an interesting problem. Better to squawk about it actually, because the system prompt needs to be clear about it, and an LLM that cannot handle it reliably is probably not approriate for use with nbscribe.
+
+Assistant:
+
+User:
+
+Assistant:
 
 User:
 

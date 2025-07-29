@@ -1,12 +1,3 @@
-<!--
-    nbscribe Conversation Log Template
-    
-    NOTE: Keep this template clean and minimal!
-    - Use external CSS files instead of inline styles
-    - Only include archived-log-specific styles inline
-    - Markdown CSS is in /static/conversation.css
-    - Main layout CSS is shared via external files
--->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -17,115 +8,11 @@
     <meta name="conversation-id" content="{{ session_id }}" />
     <meta name="created" content="{{ created_at }}" />
     
-    <!-- External CSS - keep template minimal and clean -->
+    <!-- External CSS and JavaScript only -->
     <link rel="stylesheet" href="/static/conversation.css">
+    <link rel="stylesheet" href="/static/chat-interface.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/5.1.1/marked.min.js"></script>
-    
-    <style>
-        /* Minimal archived log specific styles only */
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background-color: #ffffff;
-            margin: 0;
-            padding: 0;
-        }
-        
-        .header {
-            padding: 1rem 4%;
-            border-bottom: 1px solid #e5e5e5;
-            background: #f8f9fa;
-        }
-        
-        .header h1 {
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: #333;
-            margin: 0 0 0.25rem 0;
-        }
-        
-        .session-info {
-            font-size: 0.85rem;
-            color: #666;
-        }
-        
-        .session-info span {
-            margin-right: 1.5rem;
-        }
-        
-        .archive-notice {
-            background: #fffbeb;
-            border: 1px solid #fbbf24;
-            padding: 0.5rem 1rem;
-            font-size: 0.85rem;
-            color: #92400e;
-            margin-top: 0.5rem;
-            border-radius: 4px;
-        }
-        
-        .conversation {
-            padding: 2rem 4%;
-            min-height: 60vh;
-        }
-        
-        /* ChatGPT-style archived messages */
-        chat-msg {
-            display: block;
-            margin-bottom: 1.5rem;
-            position: relative;
-        }
-        
-        chat-msg[role="user"] {
-            max-width: 70%;
-            margin-left: auto;
-            margin-right: 0;
-            padding: 1rem 1.5rem;
-            background: #f7f7f8;
-            border-radius: 18px;
-            border-bottom-right-radius: 4px;
-        }
-        
-        chat-msg[role="assistant"] {
-            width: 100%;
-            padding: 1.5rem 0;
-            background: #ffffff;
-            margin-left: -4%;
-            margin-right: -4%;
-            padding-left: 4%;
-            padding-right: 4%;
-        }
-        
-        chat-msg[role="system"] {
-            max-width: 60%;
-            margin: 1rem auto;
-            padding: 0.75rem 1rem;
-            background: #fff3cd;
-            border-radius: 8px;
-            font-style: italic;
-            text-align: center;
-            font-size: 0.9rem;
-        }
-        
-        /* Responsive */
-        @media (max-width: 768px) {
-            .conversation, .header {
-                padding-left: 3%;
-                padding-right: 3%;
-            }
-            
-            chat-msg[role="assistant"] {
-                margin-left: -3%;
-                margin-right: -3%;
-                padding-left: 3%;
-                padding-right: 3%;
-            }
-            
-            chat-msg[role="user"] {
-                max-width: 85%;
-            }
-        }
-    </style>
+    <script src="/static/markdown-renderer.js"></script>
 </head>
 <body>
     <header class="header">
@@ -146,49 +33,7 @@
     </main>
     
     <script>
-        // Render markdown in archived conversation logs
-        document.addEventListener('DOMContentLoaded', function() {
-            if (typeof marked !== 'undefined') {
-                // Configure marked for consistent rendering - more like ChatGPT
-                marked.setOptions({
-                    breaks: true,
-                    gfm: true,
-                    headerIds: false,
-                    mangle: false,
-                    pedantic: false,  // Don't be overly strict about markdown
-                    smartypants: false // Prevent smart quote conversion
-                });
-                
-                // Custom renderer to handle lists more like ChatGPT
-                const renderer = new marked.Renderer();
-                
-                // Override list item rendering to reduce paragraph wrapping
-                renderer.listitem = function(text) {
-                    // If the text is simple (no nested blocks), don't wrap in <p>
-                    if (!text.includes('<p>') && !text.includes('<blockquote>') && !text.includes('<pre>')) {
-                        return '<li>' + text.trim() + '</li>\n';
-                    }
-                    return '<li>' + text + '</li>\n';
-                };
-                
-                marked.setOptions({ renderer: renderer });
-                
-                // Render markdown in assistant messages
-                const assistantMessages = document.querySelectorAll('chat-msg[role="assistant"]');
-                assistantMessages.forEach(function(messageEl) {
-                    const rawContent = messageEl.textContent;
-                    if (rawContent.trim()) {
-                        try {
-                            const renderedHtml = marked.parse(rawContent);
-                            messageEl.innerHTML = '<div class="markdown-body">' + renderedHtml + '</div>';
-                        } catch (error) {
-                            console.warn('Markdown rendering failed:', error);
-                            // Keep original text content if rendering fails
-                        }
-                    }
-                });
-            }
-        });
+        document.addEventListener('DOMContentLoaded', initArchivedLog);
     </script>
 </body>
 </html> 

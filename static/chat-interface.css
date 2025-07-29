@@ -1,0 +1,352 @@
+/* nbscribe Chat Interface Styles */
+
+/* Reset and base styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body { 
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+    line-height: 1.6;
+    color: #333;
+    background-color: #ffffff;
+    overflow: hidden; /* Prevent page scroll in split-pane mode */
+}
+
+/* Split-pane layout */
+.split-container {
+    display: flex;
+    height: 100vh;
+    width: 100%;
+}
+
+.notebook-pane {
+    flex: 1;
+    min-width: 0; /* Allow flex child to shrink */
+    border-right: 1px solid #e5e5e5;
+    background: #ffffff;
+}
+
+.notebook-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: #ffffff;
+}
+
+.chat-pane {
+    flex: 0 0 450px; /* Fixed width for chat */
+    min-width: 350px;
+    max-width: 600px;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+    overflow: hidden;
+}
+
+/* Header - compact for split-pane */
+.header {
+    flex: 0 0 auto; /* Don't grow/shrink, natural height */
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #e5e5e5;
+    background: #f8f9fa;
+}
+
+.header h1 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 0.25rem;
+}
+
+.session-info {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+.session-info span {
+    margin-right: 1rem;
+}
+
+/* Main conversation area - split-pane version */
+.conversation {
+    flex: 1; /* Take remaining space */
+    padding: 1rem;
+    overflow-y: auto;
+    background: #ffffff;
+}
+
+/* ChatGPT-style message layout - override conversation.css */
+chat-msg {
+    display: block;
+    margin-bottom: 1.5rem;
+    position: relative;
+}
+
+/* User messages: indented, contained width */
+chat-msg[role="user"] {
+    max-width: 70%;
+    margin-left: auto;
+    margin-right: 0;
+    padding: 1rem 1.5rem;
+    background: #f7f7f8;
+    border-radius: 18px;
+    border-bottom-right-radius: 4px;
+}
+
+/* Assistant messages: full width, subtle background */
+chat-msg[role="assistant"] {
+    width: 100%;
+    padding: 1rem 0;
+    background: #ffffff;
+}
+
+/* System messages: centered, minimal */
+chat-msg[role="system"] {
+    max-width: 60%;
+    margin: 1rem auto;
+    padding: 0.75rem 1rem;
+    background: #fff3cd;
+    border-radius: 8px;
+    font-style: italic;
+    text-align: center;
+    font-size: 0.9rem;
+}
+
+/* Remove role labels - visual distinction is enough */
+chat-msg::before {
+    display: none;
+}
+
+/* Input area - fixed at bottom of chat pane */
+.input-area {
+    flex: 0 0 auto; /* Don't grow/shrink, natural height */
+    padding: 1rem;
+    border-top: 1px solid #e5e5e5;
+    background: #ffffff;
+}
+
+.chat-form {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.chat-input {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 16px;
+    font-family: inherit;
+    background: #ffffff;
+    resize: none;
+    min-height: 66px; /* Start with ~3 lines */
+    max-height: 120px;
+    overflow-y: hidden; /* Remove scrollbar */
+    line-height: 1.4;
+}
+
+.chat-input:focus {
+    outline: none;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 1px #2563eb;
+}
+
+.chat-submit {
+    padding: 0.75rem 1.5rem;
+    background: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.chat-submit:hover {
+    background: #1d4ed8;
+}
+
+.chat-submit:disabled {
+    background: #9ca3af;
+    cursor: not-allowed;
+}
+
+/* Loading indicator */
+.loading-dots {
+    display: none;
+    text-align: left;
+    padding: 1rem 0;
+    background: #ffffff;
+}
+
+.loading-dots::after {
+    content: "●";
+    animation: dots 1.5s infinite;
+    color: #666;
+    font-size: 1.2rem;
+}
+
+@keyframes dots {
+    0%, 20% { content: "●"; }
+    40% { content: "● ●"; }
+    60% { content: "● ● ●"; }
+    80%, 100% { content: "●"; }
+}
+
+/* Error messages */
+.error {
+    padding: 1rem;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    color: #dc2626;
+    margin: 1rem 0;
+    display: none;
+}
+
+/* Archive notice for read-only logs */
+.archive-notice {
+    background: #fffbeb;
+    border: 1px solid #fbbf24;
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+    color: #92400e;
+    margin-top: 0.5rem;
+    border-radius: 4px;
+}
+
+/* Tool Directive Styling */
+.tool-directive-container {
+    margin: 1rem 0;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.tool-directive-container pre {
+    margin: 0;
+    border-radius: 8px 8px 0 0;
+}
+
+.tool-directive-buttons {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: #f8f9fa;
+    border-top: 1px solid #e9ecef;
+    border-radius: 0 0 8px 8px;
+}
+
+.tool-directive-buttons button {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.approve-btn {
+    background: #dcfce7;
+    color: #166534;
+    border: 1px solid #bbf7d0;
+}
+
+.approve-btn:hover {
+    background: #bbf7d0;
+    border-color: #86efac;
+}
+
+.reject-btn {
+    background: #fef2f2;
+    color: #dc2626;
+    border: 1px solid #fecaca;
+}
+
+.reject-btn:hover {
+    background: #fecaca;
+    border-color: #fca5a5;
+}
+
+.tool-directive-buttons button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Directive status after approval/rejection */
+.tool-directive-status {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    border-radius: 6px;
+    margin: 0.5rem 0;
+}
+
+.directive-applied {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.directive-rejected {
+    background: #fef2f2;
+    color: #dc2626;
+}
+
+/* Error styling for malformed directives */
+.tool-directive-error {
+    margin: 1rem 0;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 2px solid #dc2626;
+}
+
+.tool-directive-error pre {
+    margin: 0;
+    background: #fef2f2;
+}
+
+.error-message {
+    padding: 0.75rem;
+    background: #dc2626;
+    color: white;
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+/* Responsive adjustments for split-pane */
+@media (max-width: 1024px) {
+    .chat-pane {
+        flex: 0 0 400px; /* Smaller chat pane on medium screens */
+        min-width: 300px;
+    }
+}
+
+@media (max-width: 768px) {
+    .split-container {
+        flex-direction: column; /* Stack vertically on mobile */
+        height: 100vh;
+    }
+    
+    .notebook-pane {
+        flex: 1;
+        border-right: none;
+        border-bottom: 1px solid #e5e5e5;
+    }
+    
+    .chat-pane {
+        flex: 0 0 300px; /* Fixed height for chat on mobile */
+        min-width: unset;
+        max-width: unset;
+    }
+    
+    chat-msg[role="user"] {
+        max-width: 85%;
+    }
+} 

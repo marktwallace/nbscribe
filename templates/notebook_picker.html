@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>nbscribe - Select Notebook</title>
+    
+    <!-- External CSS -->
+    <link rel="stylesheet" href="/static/conversation.css">
+    <link rel="stylesheet" href="/static/chat-interface.css">
+    
+    <style>
+        /* Landing page specific styles */
+        .landing-container {
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        
+        .landing-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        .landing-header h1 {
+            font-size: 2rem;
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+        
+        .landing-header p {
+            color: #666;
+            font-size: 1.1rem;
+        }
+        
+        .notebook-section {
+            margin-bottom: 2rem;
+        }
+        
+        .section-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #e5e5e5;
+        }
+        
+        .notebook-list {
+            display: grid;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .notebook-item {
+            display: flex;
+            align-items: center;
+            padding: 1rem;
+            border: 1px solid #e5e5e5;
+            border-radius: 8px;
+            background: #f8f9fa;
+            text-decoration: none;
+            color: inherit;
+            transition: all 0.2s ease;
+        }
+        
+        .notebook-item:hover {
+            background: #e9ecef;
+            border-color: #2563eb;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .notebook-icon {
+            font-size: 1.5rem;
+            margin-right: 1rem;
+            color: #ff6b35;
+        }
+        
+        .notebook-info {
+            flex: 1;
+        }
+        
+        .notebook-name {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 0.25rem;
+        }
+        
+        .notebook-path {
+            font-size: 0.875rem;
+            color: #666;
+        }
+        
+        .notebook-meta {
+            font-size: 0.8rem;
+            color: #888;
+            margin-left: auto;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+        
+        .action-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .btn-primary {
+            background: #2563eb;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #1d4ed8;
+            transform: translateY(-1px);
+        }
+        
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #4b5563;
+            transform: translateY(-1px);
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .status-message {
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            display: none;
+        }
+        
+        .status-success {
+            background: #dcfce7;
+            color: #166534;
+            border: 1px solid #bbf7d0;
+        }
+        
+        .status-error {
+            background: #fef2f2;
+            color: #dc2626;
+            border: 1px solid #fecaca;
+        }
+    </style>
+</head>
+<body>
+    <div class="landing-container">
+        <div class="landing-header">
+            <h1>📓 nbscribe</h1>
+            <p>AI-powered Jupyter notebook assistant</p>
+        </div>
+        
+        <div id="status-message" class="status-message"></div>
+        
+        <div class="notebook-section">
+            <h2 class="section-title">Recent Notebooks</h2>
+            <div class="notebook-list" id="recent-notebooks">
+                {% if recent_notebooks %}
+                    {% for notebook in recent_notebooks %}
+                    <a href="/notebook/{{ notebook.path }}" class="notebook-item">
+                        <span class="notebook-icon">📓</span>
+                        <div class="notebook-info">
+                            <div class="notebook-name">{{ notebook.name }}</div>
+                            <div class="notebook-path">{{ notebook.path }}</div>
+                        </div>
+                        <div class="notebook-meta">{{ notebook.modified }}</div>
+                    </a>
+                    {% endfor %}
+                {% else %}
+                    <div class="empty-state">
+                        No recent notebooks found. Create a new one or browse files below.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="notebook-section">
+            <h2 class="section-title">Get Started</h2>
+            <div class="action-buttons">
+                <button class="action-btn btn-primary" onclick="createNewNotebook()">
+                    ➕ Create New Notebook
+                </button>
+                <label for="file-input" class="action-btn btn-secondary">
+                    📂 Browse Files
+                </label>
+                <input type="file" id="file-input" class="file-input" accept=".ipynb" onchange="handleFileSelect(event)">
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        async function createNewNotebook() {
+            try {
+                showStatus('Creating new notebook...', 'info');
+                
+                const response = await fetch('/api/notebooks/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        name: `Untitled-${Date.now()}.ipynb`
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showStatus('Notebook created successfully!', 'success');
+                    // Navigate to the new notebook
+                    setTimeout(() => {
+                        window.location.href = `/notebook/${result.path}`;
+                    }, 1000);
+                } else {
+                    throw new Error(result.error || 'Failed to create notebook');
+                }
+                
+            } catch (error) {
+                console.error('Error creating notebook:', error);
+                showStatus(`Error: ${error.message}`, 'error');
+            }
+        }
+        
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                // For now, just show the file name
+                // TODO: Implement file upload if needed
+                showStatus(`Selected: ${file.name}`, 'info');
+            }
+        }
+        
+        function showStatus(message, type) {
+            const statusEl = document.getElementById('status-message');
+            statusEl.textContent = message;
+            statusEl.className = `status-message status-${type}`;
+            statusEl.style.display = 'block';
+            
+            if (type !== 'error') {
+                setTimeout(() => {
+                    statusEl.style.display = 'none';
+                }, 3000);
+            }
+        }
+    </script>
+</body>
+</html> 

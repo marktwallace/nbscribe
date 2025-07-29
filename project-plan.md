@@ -29,7 +29,7 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML
   - [x] Display responses in chat
   - [x] Basic error handling
 
-### Chat Log System (Priority)
+### Chat Log System
 - [x] Design live HTML conversation log format
   - [x] Self-contained document with embedded CSS/JS
   - [x] Conversation metadata (session ID, timestamps)  
@@ -81,21 +81,45 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML
 - JavaScript enhances UX but page refresh is always reliable
 - Local app performance makes this approach snappy
 
-**CSS Organization Convention:**
-- `/static/conversation.css`: All markdown and shared styles (self-contained, no CDN)
-- Live chat interface (`chat.html`): Layout CSS inline for self-contained document
-- Archived logs (`conversation_log.html`): Minimal template, external CSS only
-- Keep templates clean and avoid CSS duplication
+**CSS & JavaScript Organization:**
+- `/static/conversation.css`: Markdown rendering and shared message styles
+- `/static/chat-interface.css`: All layout, forms, loading, interactive elements
+- `/static/chat-interface.js`: Complete ChatInterface class with streaming
+- `/static/markdown-renderer.js`: Shared markdown configuration and rendering
+- **NO inline styles or scripts in templates** - all code in `/static/` for caching
+- Templates are minimal HTML structure only (chat.html: 53 lines, conversation_log.html: 44 lines)
 - Lightweight approach: custom CSS instead of heavy framework dependencies
 
-### Notebook Integration (After Chat Log)
-- [ ] Create `notebook_editor.py`
-  - [ ] Read notebook with `nbformat`
-  - [ ] Basic cell insertion
-  - [ ] Save notebook changes
-- [ ] Test with a sample notebook
-  - [ ] Create test notebook
-  - [ ] Verify read/write operations
+### Notebook Integration (Phase 2)
+**Goal: Jupyter Notebook 7 Integration with AI-Driven Cell Editing**
+
+- [ ] **Notebook 7 Server Management**
+  - [ ] Launch Jupyter Notebook 7 as subprocess with fixed token
+  - [ ] Auto-discover free port (start with 8889)
+  - [ ] Implement FastAPI reverse proxy for `/jupyter/*` routes
+  - [ ] Manage server lifecycle (start/stop with nbscribe)
+- [ ] **Split-Pane UI**  
+  - [ ] Update HTML templates for two-column layout
+  - [ ] Left pane: Notebook iframe (`/jupyter/notebooks/<file>`)
+  - [ ] Right pane: Chat panel (existing interface)
+  - [ ] Maintain responsive design
+- [ ] **AI Tool Directive System**
+  - [ ] Parse Markdown tool proposals (`TOOL: insert_cell`, `edit_cell`, `delete_cell`)
+  - [ ] Extract metadata (`POS:`, `CELL_ID:`) and Python code blocks
+  - [ ] Render approval buttons **below** code blocks for better UX
+  - [ ] Handle approve/reject actions in chat interface
+- [ ] **Notebook Modification REST API**
+  - [ ] `POST /api/notebooks/{path}/insert_cell` 
+  - [ ] `PATCH /api/notebooks/{path}/edit_cell`
+  - [ ] `DELETE /api/notebooks/{path}/delete_cell`
+  - [ ] Apply changes via Jupyter Server REST API
+- [ ] **Audit Logging Integration**
+  - [ ] Save full Markdown chat history with tool directives
+  - [ ] Store as `notebook_name__nbscribe_log.md` alongside notebook
+  - [ ] Git-friendly format for version control and reproducibility
+
+**Architecture: Single notebook session for POC, expand to multi-notebook later**
+**AI never executes directly - all changes require human approval**
 
 ## Phase 2: Enhanced Features
 *After proof of concept is working*

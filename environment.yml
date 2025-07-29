@@ -13,6 +13,7 @@ dependencies:
     - fastapi
     - uvicorn[standard]
     - python-multipart
+    - httpx
     - openai
     - python-dotenv
     - langchain

@@ -9,11 +9,30 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from typing import Optional
 import uvicorn
+import httpx
 from pathlib import Path
 import os
 from datetime import datetime
 import json
+import logging
+
+# Custom logging filter to reduce WebSocket noise
+class WebSocketFilter(logging.Filter):
+    def filter(self, record):
+        # Suppress WebSocket 403 errors from Jupyter
+        if hasattr(record, 'getMessage'):
+            message = record.getMessage()
+            if 'WebSocket /jupyter/api/events/subscribe" 403' in message:
+                return False
+            if 'connection rejected (403 Forbidden)' in message:
+                return False
+        return True
+
+# Apply filter to uvicorn access logger
+uvicorn_logger = logging.getLogger("uvicorn.access")
+uvicorn_logger.addFilter(WebSocketFilter())
 
 def create_app():
     """Factory function to create FastAPI app"""
@@ -22,6 +41,13 @@ def create_app():
         description="AI-powered Jupyter Notebook assistant",
         version="0.1.0"
     )
+    
+    # Initialize notebook server manager
+    from src.notebook_server import NotebookServerManager
+    notebook_manager = NotebookServerManager()
+    
+    # Store reference for access in routes
+    app.state.notebook_manager = notebook_manager
 
     # Create static directory if it doesn't exist (relative to project root)
     static_dir = Path("static")
@@ -57,6 +83,32 @@ def create_app():
         
         # No existing sessions, create new
         return generate_session_id()
+
+    def get_recent_notebooks() -> list:
+        """Get list of recent notebook files in current directory"""
+        try:
+            notebook_files = []
+            current_dir = Path(".")
+            
+            # Find all .ipynb files
+            for notebook_path in current_dir.glob("*.ipynb"):
+                if notebook_path.is_file():
+                    stat = notebook_path.stat()
+                    notebook_files.append({
+                        "name": notebook_path.name,
+                        "path": str(notebook_path),
+                        "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+                    })
+            
+            # Sort by modification time (newest first)
+            notebook_files.sort(key=lambda x: Path(x["path"]).stat().st_mtime, reverse=True)
+            
+            # Return top 5
+            return notebook_files[:5]
+            
+        except Exception as e:
+            logging.error(f"Error getting recent notebooks: {e}")
+            return []
 
     def load_session_data(session_id: str) -> dict:
         """Load session data from HTML file or create new session"""
@@ -110,6 +162,17 @@ def create_app():
     class ChatResponse(BaseModel):
         response: str
         success: bool = True
+    
+    class DirectiveRequest(BaseModel):
+        id: str
+        tool: str
+        pos: Optional[int] = None
+        cell_id: Optional[str] = None
+        code: str
+        language: str = "python"
+    
+    class CreateNotebookRequest(BaseModel):
+        name: str
 
     # Health check endpoint
     @app.get("/health")
@@ -274,10 +337,20 @@ def create_app():
             
             raise HTTPException(status_code=500, detail=str(e))
 
-    # Root route - redirect to latest session or create new
+    # Root route - show notebook picker
     @app.get("/")
-    async def root_redirect():
-        """Redirect to latest session or create new session"""
+    async def notebook_picker(request: Request):
+        """Show notebook file picker landing page"""
+        recent_notebooks = get_recent_notebooks()
+        return templates.TemplateResponse("notebook_picker.html", {
+            "request": request,
+            "recent_notebooks": recent_notebooks
+        })
+    
+    # Legacy chat-only route
+    @app.get("/chat")
+    async def chat_only():
+        """Redirect to latest session for chat-only mode"""
         session_id = get_latest_session()
         return RedirectResponse(url=f"/session/{session_id}", status_code=302)
 
@@ -288,7 +361,49 @@ def create_app():
         session_id = generate_session_id()
         return RedirectResponse(url=f"/session/{session_id}", status_code=302)
 
-    # Session-specific chat interface
+    # Notebook-specific interface
+    @app.get("/notebook/{notebook_path:path}", response_class=HTMLResponse)
+    async def serve_notebook_interface(request: Request, notebook_path: str):
+        """Serve split-pane interface for specific notebook"""
+        if not notebook_manager.is_running():
+            raise HTTPException(status_code=503, detail="Jupyter server not running")
+        
+        # Ensure notebook exists
+        notebook_file = Path(notebook_path)
+        if not notebook_file.exists():
+            raise HTTPException(status_code=404, detail=f"Notebook not found: {notebook_path}")
+        
+        # Create or get session for this notebook
+        session_id = f"notebook_{notebook_path.replace('/', '_').replace('.', '_')}"
+        session_data = load_session_data(session_id)
+        
+        # Update greeting for notebook context
+        if session_data['is_new']:
+            initial_message = {
+                'role': 'assistant',
+                'content': f"Hello! I'm ready to help you with `{notebook_file.name}`. I can analyze your notebook and suggest code edits. What would you like to work on?",
+                'timestamp': datetime.now().isoformat()
+            }
+            session_data['messages'] = [initial_message]
+            
+            # Save updated greeting
+            from src.conversation_logger import ConversationLogger
+            logger = ConversationLogger()
+            logger.save_conversation_state(session_data['log_file'], session_data['messages'])
+        
+        return templates.TemplateResponse("chat.html", {
+            "request": request,
+            "title": f"nbscribe - {notebook_file.name}",
+            "service_name": "nbscribe",
+            "version": "0.1.0",
+            "conversation_id": session_id,
+            "created_at": session_data['created_at'],
+            "messages": session_data['messages'],
+            "notebook_path": notebook_path,
+            "notebook_iframe_url": f"/jupyter/notebooks/{notebook_path}"
+        })
+    
+    # Session-specific chat interface (legacy)
     @app.get("/session/{session_id}", response_class=HTMLResponse)
     async def serve_session_interface(request: Request, session_id: str):
         """Serve chat interface for specific session"""
@@ -302,7 +417,8 @@ def create_app():
             "version": "0.1.0",
             "conversation_id": session_id,
             "created_at": session_data['created_at'],
-            "messages": session_data['messages']  # Pass existing messages to template
+            "messages": session_data['messages'],  # Pass existing messages to template
+            "notebook_iframe_url": "/jupyter/tree"  # Default to file tree for legacy sessions
         })
 
     # API info endpoint
@@ -321,12 +437,203 @@ def create_app():
             }
         })
 
+    # Jupyter proxy routes - must be added before other routes to avoid conflicts
+    @app.api_route("/jupyter/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def jupyter_proxy(request: Request, path: str):
+        """Proxy all /jupyter/* requests to the Jupyter Notebook server"""
+        if not notebook_manager.is_running():
+            raise HTTPException(status_code=503, detail="Jupyter server not running")
+        
+        # Build target URL
+        target_url = f"http://localhost:{notebook_manager.port}/jupyter/{path}"
+        
+        # Handle query parameters with auto-token injection for GET requests
+        query_params = dict(request.query_params)
+        
+        # Auto-inject token for GET requests if not already present
+        if request.method == "GET" and "token" not in query_params:
+            query_params["token"] = notebook_manager.token
+        
+        # Add query parameters to URL
+        if query_params:
+            query_string = "&".join([f"{k}={v}" for k, v in query_params.items()])
+            target_url += f"?{query_string}"
+        
+        # Get request body if present
+        body = None
+        if request.method in ["POST", "PUT", "PATCH"]:
+            body = await request.body()
+        
+        # Forward headers (exclude host-related headers)
+        headers = {
+            key: value for key, value in request.headers.items()
+            if key.lower() not in ["host", "content-length"]
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=headers,
+                    content=body,
+                    follow_redirects=False
+                )
+                
+                # Forward response headers (exclude problematic ones)
+                response_headers = {
+                    key: value for key, value in response.headers.items()
+                    if key.lower() not in ["content-encoding", "content-length", "transfer-encoding"]
+                }
+                
+                return StreamingResponse(
+                    content=response.aiter_bytes(),
+                    status_code=response.status_code,
+                    headers=response_headers,
+                    media_type=response.headers.get("content-type")
+                )
+                
+        except httpx.RequestError as e:
+            logging.error(f"Jupyter proxy error: {e}")
+            raise HTTPException(status_code=503, detail=f"Failed to connect to Jupyter server: {e}")
+    
+    # Notebook server management endpoints
+    @app.post("/api/notebook/start")
+    async def start_notebook_server():
+        """Start the Jupyter Notebook server"""
+        try:
+            if notebook_manager.is_running():
+                return JSONResponse({"status": "already_running", "port": notebook_manager.port})
+            
+            notebook_manager.start()
+            return JSONResponse({
+                "status": "started",
+                "port": notebook_manager.port,
+                "url": notebook_manager.get_token_url()
+            })
+        except Exception as e:
+            logging.error(f"Failed to start notebook server: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @app.post("/api/notebook/stop")
+    async def stop_notebook_server():
+        """Stop the Jupyter Notebook server"""
+        try:
+            notebook_manager.stop()
+            return JSONResponse({"status": "stopped"})
+        except Exception as e:
+            logging.error(f"Failed to stop notebook server: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @app.get("/api/notebook/status")
+    async def notebook_server_status():
+        """Get Jupyter Notebook server status"""
+        return JSONResponse({
+            "running": notebook_manager.is_running(),
+            "port": notebook_manager.port,
+            "url": notebook_manager.get_token_url() if notebook_manager.is_running() else None
+        })
+    
+    @app.post("/api/notebooks/create")
+    async def create_notebook(request: CreateNotebookRequest):
+        """Create a new Jupyter notebook"""
+        try:
+            import nbformat
+            
+            # Create empty notebook
+            nb = nbformat.v4.new_notebook()
+            
+            # Add a simple welcome cell
+            welcome_cell = nbformat.v4.new_code_cell(
+                "# Welcome to your new notebook!\n# Start coding below..."
+            )
+            nb.cells.append(welcome_cell)
+            
+            # Save to current directory
+            notebook_path = Path(request.name)
+            
+            # Ensure unique filename
+            counter = 1
+            original_stem = notebook_path.stem
+            while notebook_path.exists():
+                notebook_path = Path(f"{original_stem}-{counter}.ipynb")
+                counter += 1
+            
+            # Write notebook file
+            with open(notebook_path, 'w') as f:
+                nbformat.write(nb, f)
+            
+            return JSONResponse({
+                "success": True,
+                "path": str(notebook_path),
+                "name": notebook_path.name
+            })
+            
+        except Exception as e:
+            logging.error(f"Error creating notebook: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @app.post("/api/directives/approve")
+    async def approve_directive(directive: DirectiveRequest):
+        """Apply an approved tool directive to the notebook"""
+        try:
+            if not notebook_manager.is_running():
+                raise HTTPException(status_code=503, detail="Jupyter server not running")
+            
+            # TODO: Implement actual notebook modification via Jupyter API
+            # For now, return success with a placeholder message
+            
+            result_message = ""
+            if directive.tool == "insert_cell":
+                result_message = f"Cell inserted at position {directive.pos}"
+            elif directive.tool == "edit_cell":
+                result_message = f"Cell {directive.cell_id} edited"
+            elif directive.tool == "delete_cell":
+                result_message = f"Cell {directive.cell_id} deleted"
+            else:
+                raise HTTPException(status_code=400, detail=f"Unknown tool: {directive.tool}")
+            
+            return JSONResponse({
+                "success": True,
+                "message": result_message,
+                "directive_id": directive.id
+            })
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logging.error(f"Error applying directive: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    # App lifecycle events
+    @app.on_event("startup")
+    async def startup_event():
+        """Start Jupyter server when app starts"""
+        try:
+            logging.info("Starting Jupyter Notebook server...")
+            notebook_manager.start()
+            logging.info(f"Jupyter server started on port {notebook_manager.port}")
+        except Exception as e:
+            logging.error(f"Failed to start Jupyter server: {e}")
+            # Don't fail app startup, but log the error
+    
+    @app.on_event("shutdown")
+    async def shutdown_event():
+        """Stop Jupyter server when app shuts down"""
+        try:
+            logging.info("Stopping Jupyter Notebook server...")
+            notebook_manager.stop()
+            logging.info("Jupyter server stopped")
+        except Exception as e:
+            logging.error(f"Error stopping Jupyter server: {e}")
+
     return app
 
 def run_server(host="0.0.0.0", port=5317, reload=True):
     """Run the FastAPI server"""
     print(f"🚀 Starting nbscribe server on port {port}")
     print(f"📖 Open http://localhost:{port} in your browser")
+    print(f"💡 Note: WebSocket 403 errors from Jupyter are normal (real-time updates disabled)")
     
     uvicorn.run(
         "src.server:create_app",
@@ -334,7 +641,8 @@ def run_server(host="0.0.0.0", port=5317, reload=True):
         host=host,
         port=port,
         reload=reload,
-        log_level="info"
+        log_level="info",
+        access_log=True
     )
 
 if __name__ == "__main__":
