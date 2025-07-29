@@ -78,6 +78,53 @@ def create_app():
         milliseconds = now.microsecond // 1000  # Convert microseconds to milliseconds
         return f"{timestamp}_{milliseconds:03d}"
 
+    # Notebook modification helper functions
+    async def insert_notebook_cell(position: int, code: str, language: str, notebook_manager) -> str:
+        """Insert a new cell into the notebook at the specified position"""
+        try:
+            # For now, we'll implement a simple approach by reading the notebook,
+            # modifying it, and writing it back
+            # TODO: In future, we could use Jupyter's live kernel API for real-time updates
+            
+            # This is a placeholder implementation
+            # In a real implementation, we'd need to:
+            # 1. Get the current notebook path from the session
+            # 2. Read the notebook file via Jupyter API
+            # 3. Insert the new cell at the specified position
+            # 4. Write the notebook back
+            
+            logging.info(f"Insert cell requested: position={position}, language={language}")
+            logging.info(f"Code: {code[:100]}...")  # Log first 100 chars
+            
+            return f"Cell inserted at position {position} (placeholder implementation)"
+            
+        except Exception as e:
+            logging.error(f"Error inserting cell: {e}")
+            raise Exception(f"Failed to insert cell: {e}")
+    
+    async def edit_notebook_cell(cell_id: str, code: str, notebook_manager) -> str:
+        """Edit an existing cell in the notebook"""
+        try:
+            logging.info(f"Edit cell requested: cell_id={cell_id}")
+            logging.info(f"New code: {code[:100]}...")  # Log first 100 chars
+            
+            return f"Cell {cell_id} edited (placeholder implementation)"
+            
+        except Exception as e:
+            logging.error(f"Error editing cell: {e}")
+            raise Exception(f"Failed to edit cell: {e}")
+    
+    async def delete_notebook_cell(cell_id: str, notebook_manager) -> str:
+        """Delete a cell from the notebook"""
+        try:
+            logging.info(f"Delete cell requested: cell_id={cell_id}")
+            
+            return f"Cell {cell_id} deleted (placeholder implementation)"
+            
+        except Exception as e:
+            logging.error(f"Error deleting cell: {e}")
+            raise Exception(f"Failed to delete cell: {e}")
+
     def get_latest_session() -> str:
         """Get the most recent session ID, or create new if none exist"""
         from src.conversation_logger import ConversationLogger
@@ -429,7 +476,8 @@ def create_app():
             "conversation_id": session_id,
             "created_at": session_data['created_at'],
             "messages": session_data['messages'],  # Pass existing messages to template
-            "notebook_iframe_url": "/jupyter/tree"  # Default to file tree for legacy sessions
+            "notebook_iframe_url": None,  # No notebook pane for chat-only sessions
+            "chat_only": True  # Flag to hide notebook pane
         })
 
     # API info endpoint
@@ -447,6 +495,20 @@ def create_app():
                 "sessions": "GET / (latest), GET /session/{id}, GET /new"
             }
         })
+
+    @app.get("/api/system-prompt")
+    async def get_system_prompt():
+        """Get the current system prompt for transparency"""
+        try:
+            from src.llm_interface import get_llm_interface
+            llm = get_llm_interface()
+            return JSONResponse({
+                "prompt": llm.system_prompt,
+                "source": "prompts/system_prompt.txt"
+            })
+        except Exception as e:
+            logging.error(f"Error getting system prompt: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
     # Jupyter proxy routes - must be added before other routes to avoid conflicts
     @app.api_route("/jupyter/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
@@ -604,16 +666,33 @@ def create_app():
             if not notebook_manager.is_running():
                 raise HTTPException(status_code=503, detail="Jupyter server not running")
             
-            # TODO: Implement actual notebook modification via Jupyter API
-            # For now, return success with a placeholder message
-            
+            # Parse the tool directive and execute the corresponding notebook operation
             result_message = ""
+            
             if directive.tool == "insert_cell":
-                result_message = f"Cell inserted at position {directive.pos}"
+                # Insert a new cell at the specified position
+                result_message = await insert_notebook_cell(
+                    directive.pos, 
+                    directive.code, 
+                    directive.language,
+                    notebook_manager
+                )
+                
             elif directive.tool == "edit_cell":
-                result_message = f"Cell {directive.cell_id} edited"
+                # Edit an existing cell
+                result_message = await edit_notebook_cell(
+                    directive.cell_id,
+                    directive.code,
+                    notebook_manager
+                )
+                
             elif directive.tool == "delete_cell":
-                result_message = f"Cell {directive.cell_id} deleted"
+                # Delete a cell
+                result_message = await delete_notebook_cell(
+                    directive.cell_id,
+                    notebook_manager
+                )
+                
             else:
                 raise HTTPException(status_code=400, detail=f"Unknown tool: {directive.tool}")
             
@@ -695,7 +774,7 @@ def create_app():
             logging.error(f"Events WebSocket proxy error: {e}")
         finally:
             # Clean up connections
-            if upstream and not upstream.closed:
+            if upstream:
                 try:
                     await upstream.close()
                 except Exception:
@@ -781,7 +860,7 @@ def create_app():
             logging.error(f"Kernel WebSocket proxy error: {e}")
         finally:
             # Clean up connections
-            if upstream and not upstream.closed:
+            if upstream:
                 try:
                     await upstream.close()
                 except Exception:

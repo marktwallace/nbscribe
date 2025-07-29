@@ -235,10 +235,17 @@ Answers:
 Assistant:
 
 User:
+OK, the logs are in good shape now, no repetive noise, so just good signal and worth looking at.
+
+I think we can start getting the actual AI editing going. We can add the tools with some simple test to start. And we will need to make sure the AI competions are consitent enough to trigger the right tools. I included the log of my last converstiob, which clearly shows that our system prompt is not working. I think the problem is that we are using main.txt instead of system_prompt.txt. Staying with the theme of transparency, including the system prompt in the chat log, within an expander, so it does not dominate the scrolling area, would be great.
 
 Assistant:
 
 User:
+...
+OK, lets go though the UI problems one at a time, and fix each one as I encouter then. With latest change, I restarted python main.py, and navigate to @http://0.0.0.0:5317/ 
+
+The screen is a dialog to pick an existing ipynb, but there is no scroll bar on any part of the screen, so the buttons rendered below the list are not reachable. That should never happen: there should always be a scroll bar when needed on the RHS of the screen (unless our CSS has supressed that) and the ipynb files could be in a scrolling area too, to make is less likely than button would be invisible. In this case, the buttons should probably be at the top of the screen, AWS console style, instead of the botton where they are truncated for teh two reasons above.
 
 Assistant:
 

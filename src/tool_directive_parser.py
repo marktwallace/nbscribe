@@ -1,221 +1,300 @@
+#!/usr/bin/env python3
 """
-AI Tool Directive Parser
+Tool Directive Parser for nbscribe
+Parses AI responses to extract and validate tool directives for notebook editing
+"""
 
-Parses markdown responses from AI to detect tool directives and inject approval buttons.
-Format: code block followed immediately by TOOL metadata block.
+import re
+import logging
+from typing import List, Dict, Optional
+from dataclasses import dataclass
 
-Example:
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolDirective:
+    """Represents a parsed tool directive from AI response"""
+    tool: str  # insert_cell, edit_cell, delete_cell
+    code: str  # The code content (can be empty for delete_cell)
+    pos: Optional[int] = None  # Position for insert_cell
+    cell_id: Optional[str] = None  # Cell ID for edit_cell/delete_cell
+    language: str = "python"  # Code language
+    raw_match: str = ""  # Original matched text for debugging
+
+
+class ToolDirectiveParser:
+    """
+    Parser for extracting and validating tool directives from AI responses.
+    
+    Expected format:
+    ```python
+    code here
+    ```
+    
+    ```
+    TOOL: insert_cell
+    POS: 3
+    ```
+    """
+    
+    def __init__(self):
+        # Pattern to match code blocks followed by tool directives
+        self.code_directive_pattern = re.compile(
+            r'```(\w+)?\s*\n(.*?)\n```\s*\n\s*```\s*\n(.*?)\n```',
+            re.DOTALL | re.MULTILINE
+        )
+        
+        # Pattern to match standalone tool directives (e.g., for delete_cell)
+        self.standalone_directive_pattern = re.compile(
+            r'```\s*\n(.*?)\n```',
+            re.DOTALL | re.MULTILINE
+        )
+        
+        # Pattern for tool directive content
+        self.tool_pattern = re.compile(r'TOOL:\s*(\w+)', re.IGNORECASE)
+        self.pos_pattern = re.compile(r'POS:\s*(\d+)', re.IGNORECASE)
+        self.cell_id_pattern = re.compile(r'CELL_ID:\s*(\S+)', re.IGNORECASE)
+    
+    def parse_response(self, response_text: str) -> List[ToolDirective]:
+        """
+        Parse AI response text to extract tool directives.
+        
+        Args:
+            response_text: The AI response text
+            
+        Returns:
+            List of ToolDirective objects
+        """
+        directives = []
+        
+        # First, find all code block + directive pairs
+        code_matches = self.code_directive_pattern.findall(response_text)
+        
+        for match in code_matches:
+            language = match[0] or "python"
+            code = match[1].strip()
+            directive_text = match[2].strip()
+            
+            # Parse the directive
+            directive = self._parse_directive(language, code, directive_text)
+            if directive:
+                directive.raw_match = f"```{language}\n{code}\n```\n```\n{directive_text}\n```"
+                directives.append(directive)
+                logger.info(f"Parsed tool directive: {directive.tool}")
+        
+        # Then find standalone directives (for delete_cell, etc.)
+        # Remove already matched code+directive blocks first
+        remaining_text = self.code_directive_pattern.sub('', response_text)
+        
+        standalone_matches = self.standalone_directive_pattern.findall(remaining_text)
+        for directive_text in standalone_matches:
+            directive_text = directive_text.strip()
+            
+            # Check if this looks like a tool directive
+            if self.tool_pattern.search(directive_text):
+                directive = self._parse_directive("", "", directive_text)
+                if directive:
+                    directive.raw_match = f"```\n{directive_text}\n```"
+                    directives.append(directive)
+                    logger.info(f"Parsed standalone tool directive: {directive.tool}")
+        
+        return directives
+    
+    def _parse_directive(self, language: str, code: str, directive_text: str) -> Optional[ToolDirective]:
+        """Parse a single tool directive block"""
+        try:
+            # Extract tool type
+            tool_match = self.tool_pattern.search(directive_text)
+            if not tool_match:
+                return None
+            
+            tool = tool_match.group(1).lower()
+            
+            # Validate tool type
+            if tool not in ['insert_cell', 'edit_cell', 'delete_cell']:
+                logger.warning(f"Unknown tool type: {tool}")
+                return None
+            
+            # Extract position (for insert_cell)
+            pos = None
+            pos_match = self.pos_pattern.search(directive_text)
+            if pos_match:
+                pos = int(pos_match.group(1))
+            
+            # Extract cell ID (for edit_cell/delete_cell)
+            cell_id = None
+            cell_id_match = self.cell_id_pattern.search(directive_text)
+            if cell_id_match:
+                cell_id = cell_id_match.group(1)
+            
+            # Validate required parameters
+            if tool == 'insert_cell' and pos is None:
+                logger.warning(f"insert_cell requires POS parameter")
+                return None
+            
+            if tool in ['edit_cell', 'delete_cell'] and cell_id is None:
+                logger.warning(f"{tool} requires CELL_ID parameter")
+                return None
+            
+            return ToolDirective(
+                tool=tool,
+                code=code,
+                pos=pos,
+                cell_id=cell_id,
+                language=language
+            )
+            
+        except Exception as e:
+            logger.error(f"Error parsing directive: {e}")
+            return None
+    
+    def validate_directive(self, directive: ToolDirective) -> bool:
+        """Validate a tool directive for safety and correctness"""
+        try:
+            # Basic validation
+            if not directive.tool:
+                return False
+            
+            # Tool-specific validation
+            if directive.tool == 'insert_cell':
+                if directive.pos is None or directive.pos < 0:
+                    return False
+                if not directive.code.strip():
+                    logger.warning("insert_cell with empty code")
+                    return False
+            
+            elif directive.tool == 'edit_cell':
+                if not directive.cell_id:
+                    return False
+                if not directive.code.strip():
+                    logger.warning("edit_cell with empty code")
+                    return False
+            
+            elif directive.tool == 'delete_cell':
+                if not directive.cell_id:
+                    return False
+                # delete_cell can have empty code
+            
+            # Code safety checks (basic)
+            if directive.code and directive.language == 'python':
+                # Basic safety - no dangerous imports
+                dangerous_patterns = [
+                    'import os',
+                    'import subprocess',
+                    'import sys',
+                    '__import__',
+                    'exec(',
+                    'eval(',
+                ]
+                
+                code_lower = directive.code.lower()
+                for pattern in dangerous_patterns:
+                    if pattern in code_lower:
+                        logger.warning(f"Potentially dangerous code detected: {pattern}")
+                        return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error validating directive: {e}")
+            return False
+
+
+def test_parser():
+    """Simple test for the tool directive parser"""
+    parser = ToolDirectiveParser()
+    
+    # Test case 1: insert_cell
+    test_response_1 = """
+Here's a cell to calculate primes:
+
 ```python
-print("hello")
+def is_prime(n):
+    if n <= 1:
+        return False
+    for i in range(2, int(n**0.5) + 1):
+        if n % i == 0:
+            return False
+    return True
+
+primes = [n for n in range(2, 100) if is_prime(n)]
+print(primes)
 ```
 
 ```
 TOOL: insert_cell
 POS: 3
 ```
+
+This will add the prime calculation at position 3.
 """
+    
+    directives = parser.parse_response(test_response_1)
+    assert len(directives) == 1
+    assert directives[0].tool == 'insert_cell'
+    assert directives[0].pos == 3
+    assert 'is_prime' in directives[0].code
+    assert parser.validate_directive(directives[0])
+    
+    print("✅ Test 1 passed: insert_cell directive")
+    
+    # Test case 2: Multiple directives
+    test_response_2 = """
+I'll add a plot and update the title:
 
-import re
-import html
-import json
-from typing import List, Dict, Any, Optional, Tuple
-import logging
+```python
+import matplotlib.pyplot as plt
+plt.plot([1, 2, 3, 4])
+plt.show()
+```
 
-logger = logging.getLogger(__name__)
+```
+TOOL: insert_cell
+POS: 5
+```
 
-class ToolDirective:
-    """Represents a parsed tool directive"""
-    
-    def __init__(self, tool: str, pos: Optional[int] = None, cell_id: Optional[str] = None, 
-                 code: str = "", language: str = "python"):
-        self.tool = tool
-        self.pos = pos
-        self.cell_id = cell_id
-        self.code = code
-        self.language = language
-        self.directive_id = self._generate_id()
-    
-    def _generate_id(self) -> str:
-        """Generate unique ID for this directive"""
-        import time
-        return f"directive_{int(time.time() * 1000)}_{hash(self.code) % 10000}"
-    
-    def validate(self) -> bool:
-        """Validate that directive has required fields"""
-        if self.tool not in ["insert_cell", "edit_cell", "delete_cell"]:
-            return False
-        
-        if self.tool == "insert_cell" and self.pos is None:
-            return False
-            
-        if self.tool in ["edit_cell", "delete_cell"] and not self.cell_id:
-            return False
-            
-        return True
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization"""
-        return {
-            "id": self.directive_id,
-            "tool": self.tool,
-            "pos": self.pos,
-            "cell_id": self.cell_id,
-            "code": self.code,
-            "language": self.language
-        }
+And update the existing cell:
 
-class ToolDirectiveParser:
-    """Parses markdown content and injects tool directive approval buttons"""
-    
-    def __init__(self):
-        # Pattern to match code block followed by tool directive
-        self.pattern = re.compile(
-            r'```(\w+)?\n(.*?)\n```\s*\n\s*```\s*\n(.*?)\n```',
-            re.DOTALL | re.MULTILINE
-        )
-    
-    def parse_markdown(self, markdown_text: str) -> Tuple[str, List[ToolDirective]]:
-        """
-        Parse markdown and return modified HTML with buttons + list of directives
-        
-        Returns:
-            Tuple of (modified_html, list_of_directives)
-        """
-        directives = []
-        
-        def replace_directive(match):
-            language = match.group(1) or "python"
-            code = match.group(2).strip()
-            metadata = match.group(3).strip()
-            
-            # Parse the metadata
-            directive = self._parse_metadata(metadata, code, language)
-            
-            if directive and directive.validate():
-                directives.append(directive)
-                return self._create_directive_html(directive, code, language)
-            else:
-                # Malformed directive - squawk loudly
-                error_msg = f"❌ MALFORMED TOOL DIRECTIVE: {metadata}"
-                logger.error(f"Invalid tool directive: {metadata}")
-                return self._create_error_html(code, language, error_msg)
-        
-        # Replace all matches
-        modified_text = self.pattern.sub(replace_directive, markdown_text)
-        
-        return modified_text, directives
-    
-    def _parse_metadata(self, metadata: str, code: str, language: str) -> Optional[ToolDirective]:
-        """Parse tool metadata block"""
-        try:
-            lines = [line.strip() for line in metadata.split('\n') if line.strip()]
-            
-            tool = None
-            pos = None
-            cell_id = None
-            
-            for line in lines:
-                if line.startswith('TOOL:'):
-                    tool = line.split(':', 1)[1].strip()
-                elif line.startswith('POS:'):
-                    pos = int(line.split(':', 1)[1].strip())
-                elif line.startswith('CELL_ID:'):
-                    cell_id = line.split(':', 1)[1].strip()
-            
-            if not tool:
-                return None
-                
-            return ToolDirective(tool, pos, cell_id, code, language)
-            
-        except Exception as e:
-            logger.error(f"Error parsing metadata: {e}")
-            return None
-    
-    def _create_directive_html(self, directive: ToolDirective, code: str, language: str) -> str:
-        """Create HTML for code block with approval buttons"""
-        escaped_code = html.escape(code)
-        
-        # Create the code block
-        code_html = f'<pre><code class="language-{language}">{escaped_code}</code></pre>'
-        
-        # Create approval buttons
-        buttons_html = self._create_buttons_html(directive)
-        
-        # Wrap in container
-        return f'''
-<div class="tool-directive-container" data-directive-id="{directive.directive_id}">
-    {code_html}
-    {buttons_html}
-</div>
-'''
-    
-    def _create_buttons_html(self, directive: ToolDirective) -> str:
-        """Create approval buttons HTML"""
-        # Generate button text based on tool type
-        if directive.tool == "insert_cell":
-            approve_text = f"✅ Insert Cell"
-            if directive.pos is not None:
-                approve_text += f" (pos {directive.pos})"
-        elif directive.tool == "edit_cell":
-            approve_text = f"✅ Edit Cell"
-            if directive.cell_id:
-                approve_text += f" ({directive.cell_id})"
-        elif directive.tool == "delete_cell":
-            approve_text = f"✅ Delete Cell"
-            if directive.cell_id:
-                approve_text += f" ({directive.cell_id})"
-        else:
-            approve_text = "✅ Apply"
-        
-        directive_json = html.escape(json.dumps(directive.to_dict()))
-        
-        return f'''
-<div class="tool-directive-buttons">
-    <button class="approve-btn" 
-            onclick="approveDirective('{directive.directive_id}')" 
-            data-directive='{directive_json}'>
-        {approve_text}
-    </button>
-    <button class="reject-btn" 
-            onclick="rejectDirective('{directive.directive_id}')">
-        ❌ Reject
-    </button>
-</div>
-'''
-    
-    def _create_error_html(self, code: str, language: str, error_msg: str) -> str:
-        """Create HTML for malformed directive"""
-        escaped_code = html.escape(code)
-        
-        return f'''
-<div class="tool-directive-error">
-    <pre><code class="language-{language}">{escaped_code}</code></pre>
-    <div class="error-message">{error_msg}</div>
-</div>
-'''
-    
-    def mark_directive_applied(self, directive_id: str, success: bool, result_msg: str = "") -> str:
-        """Generate HTML for applied/rejected directive state"""
-        if success:
-            status_class = "directive-applied"
-            status_text = f"✅ Applied"
-            if result_msg:
-                status_text += f": {result_msg}"
-        else:
-            status_class = "directive-rejected" 
-            status_text = f"❌ Rejected"
-            if result_msg:
-                status_text += f": {result_msg}"
-        
-        return f'<div class="tool-directive-status {status_class}">{status_text}</div>'
+```python
+plt.title("Updated Plot Title")
+```
 
-# Singleton instance
-parser = ToolDirectiveParser()
+```
+TOOL: edit_cell
+CELL_ID: plot_cell_123
+```
+"""
+    
+    directives = parser.parse_response(test_response_2)
+    assert len(directives) == 2
+    assert directives[0].tool == 'insert_cell'
+    assert directives[1].tool == 'edit_cell'
+    assert directives[1].cell_id == 'plot_cell_123'
+    
+    print("✅ Test 2 passed: Multiple directives")
+    
+    # Test case 3: delete_cell
+    test_response_3 = """
+I'll remove that debugging cell:
 
-def parse_tool_directives(markdown_text: str) -> Tuple[str, List[ToolDirective]]:
-    """Parse tool directives in markdown text"""
-    return parser.parse_markdown(markdown_text)
+```
+TOOL: delete_cell
+CELL_ID: debug_print_cell
+```
+"""
+    
+    directives = parser.parse_response(test_response_3)
+    assert len(directives) == 1
+    assert directives[0].tool == 'delete_cell'
+    assert directives[0].cell_id == 'debug_print_cell'
+    assert directives[0].code == ''
+    
+    print("✅ Test 3 passed: delete_cell directive")
+    
+    print("🎉 All tool directive parser tests passed!")
 
-def create_directive_status(directive_id: str, success: bool, result_msg: str = "") -> str:
-    """Create status HTML for completed directive"""
-    return parser.mark_directive_applied(directive_id, success, result_msg) 
+
+if __name__ == "__main__":
+    # Run tests
+    test_parser() 

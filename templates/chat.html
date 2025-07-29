@@ -16,25 +16,35 @@
     <script src="/static/chat-interface.js"></script>
 </head>
 <body>
-    <div class="split-container">
+    <div class="split-container{% if chat_only %} chat-only{% endif %}">
         <!-- Left Pane: Jupyter Notebook -->
+        {% if not chat_only and notebook_iframe_url %}
         <div class="notebook-pane">
             <iframe 
                 id="notebook-iframe"
                 class="notebook-iframe" 
-                src="{{ notebook_iframe_url | default('/jupyter/tree') }}"
+                src="{{ notebook_iframe_url }}"
                 title="Jupyter Notebook"
             ></iframe>
         </div>
+        {% endif %}
         
         <!-- Right Pane: Chat Interface -->
         <div class="chat-pane">
             <header class="header">
                 <h1>{{ service_name | default("nbscribe") }}</h1>
                 <div class="session-info">
-                    <span>Session {{ conversation_id | default("default") }}</span>
+                    <span>{% if chat_only %}Chat Session{% else %}Session{% endif %} {{ conversation_id | default("default") }}</span>
                     <span>{{ created_at | default("") }}</span>
                 </div>
+                
+                <!-- System Prompt Transparency -->
+                <details class="system-prompt-expander">
+                    <summary>System Prompt (for transparency)</summary>
+                    <div id="system-prompt-content" class="system-prompt-content">
+                        Loading system prompt...
+                    </div>
+                </details>
             </header>
             
             <main class="conversation" id="conversation">

@@ -70,7 +70,7 @@ class LLMInterface:
             logger.error(traceback.format_exc())
             raise
     
-    def _load_system_prompt(self, prompt_file: str = "main.txt"):
+    def _load_system_prompt(self, prompt_file: str = "system_prompt.txt"):
         """
         Load system prompt from prompts directory.
         
@@ -199,7 +199,7 @@ class LLMInterface:
         
         return messages
     
-    def reload_prompt(self, prompt_file: str = "main.txt"):
+    def reload_prompt(self, prompt_file: str = "system_prompt.txt"):
         """
         Reload system prompt from file.
         Useful for development and prompt iteration.

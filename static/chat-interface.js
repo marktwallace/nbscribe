@@ -11,14 +11,33 @@ class ChatInterface {
         this.chatHistory = document.getElementById('conversation');
         this.loadingIndicator = document.getElementById('loading-indicator');
         this.errorMessage = document.getElementById('error-message');
+        this.systemPromptContent = document.getElementById('system-prompt-content');
         
         // Extract session ID from page metadata
         this.sessionId = document.querySelector('meta[name="conversation-id"]').getAttribute('content');
         
         this.initMarkdown();
         this.initEventListeners();
+        this.loadSystemPrompt(); // Load system prompt for transparency
         this.renderExistingMarkdown(); // Render any existing messages
         this.scrollToBottom(); // Scroll to bottom on page load
+    }
+    
+    async loadSystemPrompt() {
+        if (!this.systemPromptContent) return;
+        
+        try {
+            const response = await fetch('/api/system-prompt');
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const data = await response.json();
+            this.systemPromptContent.textContent = data.prompt;
+        } catch (error) {
+            console.warn('Failed to load system prompt:', error);
+            this.systemPromptContent.textContent = 'Failed to load system prompt.';
+        }
     }
     
     initMarkdown() {

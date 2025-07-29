@@ -1,4 +1,34 @@
-/* nbscribe Chat Interface Styles */
+/**
+ * nbscribe Chat Interface Styles
+ * Complete styling for split-pane chat interface
+ */
+
+/* CSS Variables */
+:root {
+    --background-primary: #ffffff;
+    --background-secondary: #f8f9fa;
+    --background-hover: #e9ecef;
+    --text-primary: #212529;
+    --text-secondary: #6c757d;
+    --border-color: #dee2e6;
+    --accent-color: #007bff;
+    --success-color: #28a745;
+    --warning-color: #ffc107;
+    --danger-color: #dc3545;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --background-primary: #1a1a1a;
+        --background-secondary: #2d2d2d;
+        --background-hover: #404040;
+        --text-primary: #ffffff;
+        --text-secondary: #b0b0b0;
+        --border-color: #404040;
+        --accent-color: #0d6efd;
+    }
+}
 
 /* Reset and base styles */
 * {
@@ -15,25 +45,32 @@ body {
     overflow: hidden; /* Prevent page scroll in split-pane mode */
 }
 
-/* Split-pane layout */
+/* Split container layout */
 .split-container {
     display: flex;
     height: 100vh;
-    width: 100%;
+    overflow: hidden;
 }
 
+/* Chat-only mode - full width chat */
+.split-container.chat-only .chat-pane {
+    flex: 1;  /* Take full width instead of fixed 450px */
+    min-width: 0;
+    max-width: none;
+}
+
+/* Notebook pane (left side) */
 .notebook-pane {
     flex: 1;
-    min-width: 0; /* Allow flex child to shrink */
-    border-right: 1px solid #e5e5e5;
-    background: #ffffff;
+    min-width: 0;
+    border-right: 1px solid var(--border-color);
 }
 
 .notebook-iframe {
     width: 100%;
     height: 100%;
     border: none;
-    background: #ffffff;
+    background: white;
 }
 
 .chat-pane {
@@ -46,28 +83,67 @@ body {
     overflow: hidden;
 }
 
-/* Header - compact for split-pane */
+/* Header styles */
 .header {
-    flex: 0 0 auto; /* Don't grow/shrink, natural height */
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid #e5e5e5;
-    background: #f8f9fa;
+    background: var(--background-primary);
+    border-bottom: 1px solid var(--border-color);
+    padding: 1rem;
+    flex-shrink: 0;
 }
 
 .header h1 {
-    font-size: 1rem;
+    margin: 0 0 0.5rem 0;
+    font-size: 1.25rem;
     font-weight: 600;
-    color: #333;
-    margin-bottom: 0.25rem;
+    color: var(--text-primary);
 }
 
 .session-info {
-    font-size: 0.8rem;
-    color: #666;
+    display: flex;
+    gap: 1rem;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
 }
 
-.session-info span {
-    margin-right: 1rem;
+/* System Prompt Expander */
+.system-prompt-expander {
+    margin-top: 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--background-secondary);
+}
+
+.system-prompt-expander summary {
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    user-select: none;
+    border-radius: 3px;
+}
+
+.system-prompt-expander summary:hover {
+    background: var(--background-hover);
+}
+
+.system-prompt-expander[open] summary {
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 0.5rem;
+}
+
+.system-prompt-content {
+    padding: 0.75rem;
+    font-family: 'SF Mono', Consolas, 'Monaco', 'Inconsolata', 'Fira Code', 'Droid Sans Mono', 'Source Code Pro', monospace;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    overflow-x: auto;
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--background-primary);
+    border-radius: 3px;
 }
 
 /* Main conversation area - split-pane version */
