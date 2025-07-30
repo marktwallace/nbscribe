@@ -17,8 +17,10 @@ class ToolDirective:
     """Represents a parsed tool directive from AI response"""
     tool: str  # insert_cell, edit_cell, delete_cell
     code: str  # The code content (can be empty for delete_cell)
-    pos: Optional[int] = None  # Position for insert_cell
+    pos: Optional[int] = None  # Position for insert_cell (fallback)
     cell_id: Optional[str] = None  # Cell ID for edit_cell/delete_cell
+    before: Optional[str] = None  # Insert before this cell ID
+    after: Optional[str] = None   # Insert after this cell ID
     language: str = "python"  # Code language
     raw_match: str = ""  # Original matched text for debugging
 
@@ -55,6 +57,8 @@ class ToolDirectiveParser:
         self.tool_pattern = re.compile(r'TOOL:\s*(\w+)', re.IGNORECASE)
         self.pos_pattern = re.compile(r'POS:\s*(\d+)', re.IGNORECASE)
         self.cell_id_pattern = re.compile(r'CELL_ID:\s*(\S+)', re.IGNORECASE)
+        self.before_pattern = re.compile(r'BEFORE:\s*(\S+)', re.IGNORECASE)
+        self.after_pattern = re.compile(r'AFTER:\s*(\S+)', re.IGNORECASE)
     
     def parse_response(self, response_text: str) -> List[ToolDirective]:
         """
@@ -75,6 +79,12 @@ class ToolDirectiveParser:
             language = match[0] or "python"
             code = match[1].strip()
             directive_text = match[2].strip()
+            
+            # Debug logging for newline investigation
+            logger.info(f"DIRECTIVE PARSER - Raw code length: {len(match[1])}")
+            logger.info(f"DIRECTIVE PARSER - Stripped code length: {len(code)}")
+            logger.info(f"DIRECTIVE PARSER - Code contains \\n: {'\\n' in code}")
+            logger.info(f"DIRECTIVE PARSER - Code repr: {repr(code[:100])}")
             
             # Parse the directive
             directive = self._parse_directive(language, code, directive_text)
@@ -116,7 +126,7 @@ class ToolDirectiveParser:
                 logger.warning(f"Unknown tool type: {tool}")
                 return None
             
-            # Extract position (for insert_cell)
+            # Extract position (for insert_cell fallback)
             pos = None
             pos_match = self.pos_pattern.search(directive_text)
             if pos_match:
@@ -128,10 +138,35 @@ class ToolDirectiveParser:
             if cell_id_match:
                 cell_id = cell_id_match.group(1)
             
+            # Extract BEFORE/AFTER (for insert_cell)
+            before = None
+            before_match = self.before_pattern.search(directive_text)
+            if before_match:
+                before = before_match.group(1)
+                
+            after = None
+            after_match = self.after_pattern.search(directive_text)
+            if after_match:
+                after = after_match.group(1)
+            
             # Validate required parameters
-            if tool == 'insert_cell' and pos is None:
-                logger.warning(f"insert_cell requires POS parameter")
-                return None
+            if tool == 'insert_cell':
+                has_relative = before or after
+                has_absolute = pos is not None
+                
+                if not has_relative and not has_absolute:
+                    logger.warning(f"insert_cell requires BEFORE, AFTER, or POS parameter")
+                    return None
+                    
+                # Can't have both relative and absolute
+                if has_relative and has_absolute:
+                    logger.warning(f"insert_cell cannot have both relative (BEFORE/AFTER) and absolute (POS) positioning")
+                    return None
+                    
+                # Can't have both BEFORE and AFTER
+                if before and after:
+                    logger.warning(f"insert_cell cannot have both BEFORE and AFTER")
+                    return None
             
             if tool in ['edit_cell', 'delete_cell'] and cell_id is None:
                 logger.warning(f"{tool} requires CELL_ID parameter")
@@ -142,6 +177,8 @@ class ToolDirectiveParser:
                 code=code,
                 pos=pos,
                 cell_id=cell_id,
+                before=before,
+                after=after,
                 language=language
             )
             
@@ -158,8 +195,23 @@ class ToolDirectiveParser:
             
             # Tool-specific validation
             if directive.tool == 'insert_cell':
-                if directive.pos is None or directive.pos < 0:
+                has_relative = directive.before or directive.after
+                has_absolute = directive.pos is not None and directive.pos >= 0
+                
+                if not has_relative and not has_absolute:
+                    logger.warning("insert_cell requires BEFORE, AFTER, or POS parameter")
                     return False
+                    
+                # Can't have both relative and absolute positioning
+                if has_relative and has_absolute:
+                    logger.warning("insert_cell cannot have both relative and absolute positioning")
+                    return False
+                    
+                # Can't have both BEFORE and AFTER
+                if directive.before and directive.after:
+                    logger.warning("insert_cell cannot have both BEFORE and AFTER")
+                    return False
+                
                 if not directive.code.strip():
                     logger.warning("insert_cell with empty code")
                     return False
@@ -239,7 +291,7 @@ This will add the prime calculation at position 3.
     
     print("✅ Test 1 passed: insert_cell directive")
     
-    # Test case 2: Multiple directives
+    # Test case 2: Multiple directives with BEFORE/AFTER
     test_response_2 = """
 I'll add a plot and update the title:
 
@@ -251,7 +303,7 @@ plt.show()
 
 ```
 TOOL: insert_cell
-POS: 5
+AFTER: data-loading-cell
 ```
 
 And update the existing cell:
@@ -269,10 +321,12 @@ CELL_ID: plot_cell_123
     directives = parser.parse_response(test_response_2)
     assert len(directives) == 2
     assert directives[0].tool == 'insert_cell'
+    assert directives[0].after == 'data-loading-cell'
+    assert directives[0].pos is None
     assert directives[1].tool == 'edit_cell'
     assert directives[1].cell_id == 'plot_cell_123'
     
-    print("✅ Test 2 passed: Multiple directives")
+    print("✅ Test 2 passed: Multiple directives with BEFORE/AFTER")
     
     # Test case 3: delete_cell
     test_response_3 = """
@@ -291,6 +345,31 @@ CELL_ID: debug_print_cell
     assert directives[0].code == ''
     
     print("✅ Test 3 passed: delete_cell directive")
+    
+    # Test case 4: BEFORE directive
+    test_response_4 = """
+Let's add setup code before the main analysis:
+
+```python
+import pandas as pd
+import numpy as np
+```
+
+```
+TOOL: insert_cell
+BEFORE: analysis-cell-456
+```
+"""
+    
+    directives = parser.parse_response(test_response_4)
+    assert len(directives) == 1
+    assert directives[0].tool == 'insert_cell'
+    assert directives[0].before == 'analysis-cell-456'
+    assert directives[0].after is None
+    assert directives[0].pos is None
+    assert parser.validate_directive(directives[0])
+    
+    print("✅ Test 4 passed: BEFORE directive")
     
     print("🎉 All tool directive parser tests passed!")
 

@@ -22,18 +22,20 @@ with structured "tool directives" that a human user can review and approve.
 
 ```
 TOOL: insert_cell | edit_cell | delete_cell
-POS: <integer>          # required for insert_cell (position to insert)
-CELL_ID: <string>       # required for edit_cell or delete_cell
+BEFORE: <cell_id>        # Insert before this cell (for insert_cell)
+AFTER: <cell_id>         # Insert after this cell (for insert_cell) 
+POS: <integer>           # Insert at position (fallback for insert_cell)
+CELL_ID: <string>        # Required for edit_cell or delete_cell
 ```
 
 ## Supported Tools:
-- **insert_cell**: Add a new cell at specified position (requires POS)
+- **insert_cell**: Add a new cell relative to existing cells (use BEFORE/AFTER with cell IDs, or POS for empty notebooks)
 - **edit_cell**: Modify existing cell content (requires CELL_ID)  
 - **delete_cell**: Remove a cell (requires CELL_ID)
 
 ## Example:
 
-Here's how you could plot a histogram:
+Here's how you could plot a histogram after the data loading cell:
 
 ```python
 import matplotlib.pyplot as plt
@@ -43,7 +45,7 @@ plt.show()
 
 ```
 TOOL: insert_cell
-POS: 3
+AFTER: data-loading-cell-123
 ```
 
 - If suggesting multiple edits, create multiple code block + directive pairs.
@@ -71,7 +73,7 @@ print("Hello world")
 
 ```
 TOOL: insert_cell
-POS: 2
+AFTER: setup-cell-456
 ```
 
 ---
@@ -101,12 +103,12 @@ CELL_ID: abc123
 ## Example 3: Multiple edits in one message
 
 ### User:
-Add a scatterplot and update cell `xyz456` with a new title.
+Add a scatterplot after the histogram and update cell `xyz456` with a new title.
 
 ### Assistant:
 Here are the proposed changes:
 
-First, let's add a scatterplot:
+First, let's add a scatterplot after the histogram:
 
 ```python
 import seaborn as sns
@@ -115,7 +117,7 @@ sns.scatterplot(data=df, x='height', y='weight')
 
 ```
 TOOL: insert_cell
-POS: 5
+AFTER: histogram-cell-789
 ```
 
 Then update the existing cell:

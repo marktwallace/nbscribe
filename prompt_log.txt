@@ -250,8 +250,96 @@ The screen is a dialog to pick an existing ipynb, but there is no scroll bar on 
 Assistant:
 
 User:
+...
+OK, that is better: our file picker is usable, and the scrolling ensures everything needed is visible.
+
+I created a new notebook and ask for the prive number sieve. I generated correct for an accept and reject buttons below. The accept buttin did not work when I clicked it, because it did not create a cell at position 2.  It now reads: "✅ Applied: Cell inserted at position 2"
+
+There were several errors in the console log, which I nclude here so you can scan it:
+
+Assistant:
+...
+Key Decision Points
+Cell ID strategy: How do we identify cells for editing/deletion?
+Option A: Use Jupyter's cell metadata to add stable IDs
+Option B: Use cell position indices (simpler but fragile)
+Real-time vs File-based:
+Option A: Modify the notebook file directly
+Option B: Use Jupyter's live kernel API (more complex but real-time)
+My recommendation: Start with Option A for both - simpler, more reliable, and gets us working functionality quickly.
+...
+
+User:
+Cells IDs will be important in all phases of this, since the edits will update the file and we will lose execution information unless we always maintain the cell ids. So the edits and deletes should use cell ids, right? Inserts are slightly different, since a new id will be generated relative position should be used. So we can use ordinal position like "pos", or we can saw "before" or "after" a cell id. Which approach seems most conventional to you for inserts? Is there a model we can follow in other Jupyter tools?
+
+Assistant:
+Excellent point about cell IDs! You're absolutely right that maintaining stable cell IDs is crucial for preserving execution state and metadata across edits.
+🔍 Looking at Jupyter Ecosystem Patterns
+From examining Jupyter tooling, the most conventional approach for inserts is relative positioning with cell IDs using BEFORE/AFTER semantics:
+Jupyter Lab/Notebook UI Pattern
+"Insert Cell Above" / "Insert Cell Below" buttons
+Always relative to the currently selected cell
+Never uses absolute positioning
+JupyterLab Extensions Pattern
+Many extensions use patterns like:
+Apply to prompt_log.t...
+;
+nbformat Library
+While the underlying storage is a list (positional), most tools work with relative references to avoid brittleness.
+...
+
+User:
+...
+That is a good plan, but I have a few changes: I should create the test notebook manually in nbscribe, so just succintly describe those steps, rather than provide JSON. To test phase 2, I will exit, read the json, then restart and load the notebook I just build by hand. Now generate a .md file with thus test procedure in it and I will work through it. I will make notes in the markdown so you can keep up with my progress. I am really looking forward to getting a first hand idea of how the UX feels! 
 
 Assistant:
 
 User:
+OK, I don't think we need to debug until we know we have the architecture where we want it and the implementation is reviewably complete. Some parts of what you say are just right: The AI prompt should start with a System message that contains the entire system prompt. After that (probably immediately after) should come a User message that contains the full source of the notebook at the time the conversation begins. IMPORTANT: we make this a User message because we never want the Assistent to emit that information. If we make it anything other than a User message, the AI might take responsilibity for tracking and emitting that information, but we do not want it to do that. After the user message is the first assistant message where the AI offers to help with the code. The AI has _seen_ the code before it emits this message, which is good. Then the next User message is the human asking for help, most likely. Subsequent Assistant messages will contain proposed code. If the human accepts the change (in the browser UI) then a cell gets mutated by Jupyter. After that, we take the full text of the mutated cell, including its ID, and we add it to the message history as a User message. This User message is not from the human -- it is an update to the source code that was shows in the very forst User message above. The agentic AI needs to be able to track the actuall source code by knowing about those additions and changes. After enough exchanges, we summerize the conversation and start over with the AI prompt, with a new System message and an updated and complete code listing in the first User message. 
+
+Now do you understand the cycle and flow? Note that is never break caching buy updating previous messages, until is summerizes and starts over. That is to improve performance and save money. Please comment on this design and how understandable it is for the agentic AI.
+
+Assistant:
+💭 Outstanding Questions
+Conversation Triggers: What should trigger a restart? Token count? Message count? Time?
+Error Handling: If cell update fails, do we add "Cell update failed" as User message?
+Batch Updates: If AI suggests 3 cells and all are approved, one User message or three?
+Cell Deletion: How do we represent "Cell abc123 deleted" in the conversation?
+
+User:
+1. Token count would be best. And there will be a user control to do it earlier.
+2. Yes, all state updates are user messages. We will wrap them in identifiers that allo the to be compacted at expanders iin the converstion, so as not to clutter up the log. But they are stll there in their entirety from transparancy and later for training.
+3. Let's wait on batch updates until we have some experience with this.
+4. We need a clear indicator to the AI that a cell has been deleted. The system prompt need to explain the signicance of delete.
+
+Before any coding, update the project plan to reflect this design change and map out the steps to get there.
+
+Assistant:
+
+User:
+I reviewed the plan and it looks good. There is one more point I want to clarify: LLM's including gpt-4.1 have an excellent abliity to comprehend JSON. They have also probably been trained some .ipynb files. So it make sense to include the .ipynb file in the context in its entirely, as JSON, right? That would convey the most meaning to the LLM?
+
+Similarly, edits to the .ipynb could just be JSON fragments, like this:
+
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "e5d4fd8b-de45-4d70-b0e8-da0223e59e94",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "print(\"hello\")"
+   ]
+  }
+
+Creating our own syntax in addition to the obviously meaningful JSON in .ipynb would not add anything useful for the agentic AI, right?
+
+Assistant:
+
+User:
+
+Assistant:
+
+User:
+
 

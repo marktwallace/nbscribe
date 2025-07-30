@@ -80,6 +80,8 @@ function parseDirectiveMetadata(metadata, code, language) {
         let tool = null;
         let pos = null;
         let cell_id = null;
+        let before = null;
+        let after = null;
         
         for (const line of lines) {
             if (line.startsWith('TOOL:')) {
@@ -88,18 +90,28 @@ function parseDirectiveMetadata(metadata, code, language) {
                 pos = parseInt(line.split(':', 2)[1].trim());
             } else if (line.startsWith('CELL_ID:')) {
                 cell_id = line.split(':', 2)[1].trim();
+            } else if (line.startsWith('BEFORE:')) {
+                before = line.split(':', 2)[1].trim();
+            } else if (line.startsWith('AFTER:')) {
+                after = line.split(':', 2)[1].trim();
             }
         }
         
         if (!tool) return null;
         
+        // Get session ID from meta tag
+        const sessionId = document.querySelector('meta[name="conversation-id"]')?.content || null;
+        
         return {
             tool: tool,
             pos: pos,
             cell_id: cell_id,
+            before: before,
+            after: after,
             code: code,
             language: language,
-            id: generateDirectiveId()
+            id: generateDirectiveId(),
+            session_id: sessionId
         };
         
     } catch (error) {
@@ -113,8 +125,24 @@ function validateDirective(directive) {
         return false;
     }
     
-    if (directive.tool === 'insert_cell' && directive.pos === null) {
-        return false;
+    if (directive.tool === 'insert_cell') {
+        // For insert_cell, we need either BEFORE, AFTER, or POS
+        const hasRelativePosition = directive.before || directive.after;
+        const hasAbsolutePosition = directive.pos !== null && directive.pos !== undefined;
+        
+        if (!hasRelativePosition && !hasAbsolutePosition) {
+            return false;
+        }
+        
+        // Can't have both relative and absolute positioning
+        if (hasRelativePosition && hasAbsolutePosition) {
+            return false;
+        }
+        
+        // Can't have both BEFORE and AFTER
+        if (directive.before && directive.after) {
+            return false;
+        }
     }
     
     if (['edit_cell', 'delete_cell'].includes(directive.tool) && !directive.cell_id) {
@@ -134,7 +162,15 @@ function createDirectiveHTML(directive, code, language) {
     // Generate button text
     let approveText = '✅ Apply';
     if (directive.tool === 'insert_cell') {
-        approveText = `✅ Insert Cell${directive.pos !== null ? ` (pos ${directive.pos})` : ''}`;
+        if (directive.before) {
+            approveText = `✅ Insert Cell (before ${directive.before})`;
+        } else if (directive.after) {
+            approveText = `✅ Insert Cell (after ${directive.after})`;
+        } else if (directive.pos !== null) {
+            approveText = `✅ Insert Cell (pos ${directive.pos})`;
+        } else {
+            approveText = '✅ Insert Cell';
+        }
     } else if (directive.tool === 'edit_cell') {
         approveText = `✅ Edit Cell${directive.cell_id ? ` (${directive.cell_id})` : ''}`;
     } else if (directive.tool === 'delete_cell') {

@@ -96,7 +96,7 @@ class LLMInterface:
             # Use fallback prompt
             self.system_prompt = "You are a helpful AI assistant for Jupyter notebooks."
     
-    def generate_response(self, user_message: str, conversation_context: Optional[str] = None) -> str:
+    def generate_response(self, user_message: str, conversation_context: Optional[str] = None, notebook_context: Optional[str] = None) -> str:
         """
         Generate a response using the LLM.
         No hidden state - all context must be provided explicitly.
@@ -104,6 +104,7 @@ class LLMInterface:
         Args:
             user_message: The user's message
             conversation_context: Optional conversation history (from HTML log)
+            notebook_context: Optional current notebook structure
             
         Returns:
             The LLM's response as a string
@@ -116,7 +117,7 @@ class LLMInterface:
                 raise RuntimeError("LLM client not initialized")
             
             # Build messages - no hidden state, everything explicit
-            messages = self._build_messages(user_message, conversation_context)
+            messages = self._build_messages(user_message, conversation_context, notebook_context)
             
             logger.info(f"Sending request to {self.model_name}")
             logger.debug(f"User message: {user_message}")
@@ -138,7 +139,7 @@ class LLMInterface:
             logger.error(traceback.format_exc())
             raise
 
-    def generate_response_stream(self, user_message: str, conversation_context: Optional[str] = None):
+    def generate_response_stream(self, user_message: str, conversation_context: Optional[str] = None, notebook_context: Optional[str] = None):
         """
         Generate a streaming response using the LLM.
         Yields chunks as they arrive from the LLM.
@@ -146,6 +147,7 @@ class LLMInterface:
         Args:
             user_message: The user's message
             conversation_context: Optional conversation history (from HTML log)
+            notebook_context: Optional current notebook structure
             
         Yields:
             String chunks of the response as they arrive
@@ -158,7 +160,7 @@ class LLMInterface:
                 raise RuntimeError("LLM client not initialized")
             
             # Build messages - no hidden state, everything explicit
-            messages = self._build_messages(user_message, conversation_context)
+            messages = self._build_messages(user_message, conversation_context, notebook_context)
             
             logger.info(f"Sending streaming request to {self.model_name}")
             logger.debug(f"User message: {user_message}")
@@ -178,7 +180,7 @@ class LLMInterface:
             logger.error(traceback.format_exc())
             raise
 
-    def _build_messages(self, user_message: str, conversation_context: Optional[str] = None):
+    def _build_messages(self, user_message: str, conversation_context: Optional[str] = None, notebook_context: Optional[str] = None):
         """
         Build message list for LLM calls.
         Extracted into helper method to avoid duplication between streaming and regular calls.
@@ -188,6 +190,11 @@ class LLMInterface:
         # Add system prompt
         if self.system_prompt:
             messages.append(SystemMessage(content=self.system_prompt))
+        
+        # Add notebook structure context if provided
+        if notebook_context:
+            notebook_message = f"Current notebook context:\n{notebook_context}\n\n"
+            messages.append(SystemMessage(content=notebook_message))
         
         # Add conversation context if provided
         if conversation_context:
@@ -230,16 +237,17 @@ def get_llm_interface() -> LLMInterface:
     return _llm_interface
 
 
-def generate_response(user_message: str, conversation_context: Optional[str] = None) -> str:
+def generate_response(user_message: str, conversation_context: Optional[str] = None, notebook_context: Optional[str] = None) -> str:
     """
     Convenience function for generating responses.
     
     Args:
         user_message: The user's message
         conversation_context: Optional conversation history
+        notebook_context: Optional current notebook structure
         
     Returns:
         The LLM's response
     """
     llm = get_llm_interface()
-    return llm.generate_response(user_message, conversation_context) 
+    return llm.generate_response(user_message, conversation_context, notebook_context) 

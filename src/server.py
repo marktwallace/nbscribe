@@ -17,6 +17,8 @@ import os
 from datetime import datetime
 import json
 import logging
+import time
+from collections import defaultdict, deque
 
 # Surgical log filter - suppress only the identified repetitive polling patterns
 class JupyterRepetitiveFilter(logging.Filter):
@@ -45,6 +47,69 @@ class JupyterRepetitiveFilter(logging.Filter):
 # Apply surgical filter to suppress only identified noise
 logging.getLogger("uvicorn.access").addFilter(JupyterRepetitiveFilter())
 
+# Kernel protection system - prevent 404 flooding
+class KernelProtection:
+    """Circuit breaker and rate limiting for kernel requests"""
+    
+    def __init__(self):
+        # Track failed kernel requests (kernel_id -> list of failure timestamps)
+        self.kernel_failures = defaultdict(lambda: deque(maxlen=10))
+        # Blocked kernels (kernel_id -> block_until_timestamp)
+        self.blocked_kernels = {}
+        # Recently seen requests for deduplication
+        self.recent_requests = {}
+        
+    def should_block_kernel(self, kernel_id: str) -> bool:
+        """Check if a kernel should be blocked due to repeated failures"""
+        now = time.time()
+        
+        # Check if kernel is currently blocked
+        if kernel_id in self.blocked_kernels:
+            if now < self.blocked_kernels[kernel_id]:
+                return True
+            else:
+                # Block period expired, remove from blocked list
+                del self.blocked_kernels[kernel_id]
+                
+        return False
+    
+    def record_kernel_failure(self, kernel_id: str):
+        """Record a kernel failure and potentially block future requests"""
+        now = time.time()
+        failures = self.kernel_failures[kernel_id]
+        
+        # Add current failure
+        failures.append(now)
+        
+        # Check if we should block this kernel
+        # If 5+ failures in last 30 seconds, block for 60 seconds
+        recent_failures = [f for f in failures if now - f < 30]
+        if len(recent_failures) >= 5:
+            self.blocked_kernels[kernel_id] = now + 60  # Block for 60 seconds
+            logging.warning(f"Blocking kernel {kernel_id} due to repeated failures (5+ in 30s)")
+            return True
+            
+        return False
+    
+    def is_duplicate_request(self, request_key: str, window_seconds: float = 1.0) -> bool:
+        """Check if this is a duplicate request within the time window"""
+        now = time.time()
+        
+        # Clean old requests
+        self.recent_requests = {k: v for k, v in self.recent_requests.items() 
+                              if now - v < window_seconds}
+        
+        # Check if request is duplicate
+        if request_key in self.recent_requests:
+            return True
+            
+        # Record this request
+        self.recent_requests[request_key] = now
+        return False
+
+# Global protection instance
+kernel_protection = KernelProtection()
+
 def create_app():
     """Factory function to create FastAPI app"""
     app = FastAPI(
@@ -70,6 +135,30 @@ def create_app():
     # Set up Jinja2 templates
     templates = Jinja2Templates(directory="templates")
 
+    # Data models for API - must be defined before functions that reference them
+    class ChatMessage(BaseModel):
+        message: str
+        session_id: str = None
+        notebook_path: str = None
+
+    class ChatResponse(BaseModel):
+        response: str
+        success: bool = True
+    
+    class DirectiveRequest(BaseModel):
+        id: str
+        tool: str
+        pos: Optional[int] = None
+        cell_id: Optional[str] = None
+        before: Optional[str] = None
+        after: Optional[str] = None
+        code: str
+        language: str = "python"
+        session_id: Optional[str] = None  # Add session context
+    
+    class CreateNotebookRequest(BaseModel):
+        name: str
+
     # Session management utilities
     def generate_session_id() -> str:
         """Generate a unique session ID with timestamp and milliseconds"""
@@ -78,48 +167,349 @@ def create_app():
         milliseconds = now.microsecond // 1000  # Convert microseconds to milliseconds
         return f"{timestamp}_{milliseconds:03d}"
 
-    # Notebook modification helper functions
-    async def insert_notebook_cell(position: int, code: str, language: str, notebook_manager) -> str:
-        """Insert a new cell into the notebook at the specified position"""
+    def extract_notebook_path_from_session(session_id: str) -> Optional[str]:
+        """Extract notebook path from session ID if it's a notebook session"""
+        if session_id.startswith("notebook_"):
+            # Remove prefix
+            path_part = session_id[9:]  # Remove "notebook_" prefix
+            
+            # Smart reconstruction: handle the encoding we used in session creation
+            # Original: notebook_path.replace('/', '_').replace('.', '_')
+            # So we need to reverse this carefully
+            
+            # Check if it ends with common notebook patterns
+            if path_part.endswith('_ipynb'):
+                # This is likely "filename.ipynb" encoded as "filename_ipynb"
+                notebook_path = path_part[:-6] + '.ipynb'  # Replace "_ipynb" with ".ipynb"
+            elif path_part.endswith('_py'):
+                # This is likely "filename.py" encoded as "filename_py"  
+                notebook_path = path_part[:-3] + '.py'
+            else:
+                # Fallback: try both approaches
+                # 1. All underscores to dots (for simple filenames)
+                # 2. Underscores to slashes (for paths with directories)
+                possible_paths = [
+                    path_part.replace('_', '.') + '.ipynb',     # Simple filename approach
+                    path_part.replace('_', '/') + '.ipynb',     # Directory approach
+                    path_part + '.ipynb'                        # Direct approach
+                ]
+                
+                for path in possible_paths:
+                    if Path(path).exists():
+                        return path
+                
+                # Default to the most likely
+                notebook_path = path_part.replace('_', '.') + '.ipynb'
+            
+            logging.info(f"SESSION->PATH: {session_id} -> {notebook_path}")
+            return notebook_path
+        
+        return None
+
+    async def get_notebook_content(notebook_path: str, notebook_manager) -> dict:
+        """Read notebook content via Jupyter Contents API"""
         try:
-            # For now, we'll implement a simple approach by reading the notebook,
-            # modifying it, and writing it back
-            # TODO: In future, we could use Jupyter's live kernel API for real-time updates
+            if not notebook_manager.is_running():
+                raise Exception("Jupyter server not running")
             
-            # This is a placeholder implementation
-            # In a real implementation, we'd need to:
-            # 1. Get the current notebook path from the session
-            # 2. Read the notebook file via Jupyter API
-            # 3. Insert the new cell at the specified position
-            # 4. Write the notebook back
+            # Use Jupyter Contents API to read the notebook
+            url = f"http://localhost:{notebook_manager.port}/jupyter/api/contents/{notebook_path}"
+            params = {"content": "1", "token": notebook_manager.token}
             
-            logging.info(f"Insert cell requested: position={position}, language={language}")
-            logging.info(f"Code: {code[:100]}...")  # Log first 100 chars
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+                return response.json()
+                
+        except Exception as e:
+            logging.error(f"Error reading notebook {notebook_path}: {e}")
+            raise Exception(f"Failed to read notebook: {e}")
+
+    async def write_notebook_content(notebook_path: str, content: dict, notebook_manager) -> dict:
+        """Write notebook content via Jupyter Contents API"""
+        try:
+            if not notebook_manager.is_running():
+                raise Exception("Jupyter server not running")
             
-            return f"Cell inserted at position {position} (placeholder implementation)"
+            # Use Jupyter Contents API to write the notebook
+            url = f"http://localhost:{notebook_manager.port}/jupyter/api/contents/{notebook_path}"
+            params = {"token": notebook_manager.token}
+            
+            # Prepare the content for the API
+            api_content = {
+                "type": "notebook",
+                "format": "json",
+                "content": content
+            }
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.put(url, json=api_content, params=params)
+                response.raise_for_status()
+                return response.json()
+                
+        except Exception as e:
+            logging.error(f"Error writing notebook {notebook_path}: {e}")
+            raise Exception(f"Failed to write notebook: {e}")
+
+    def ensure_cell_ids(notebook_content: dict) -> dict:
+        """Ensure all cells have stable UUIDs in metadata"""
+        import uuid
+        
+        cells = notebook_content.get("cells", [])
+        
+        for cell in cells:
+            if "metadata" not in cell:
+                cell["metadata"] = {}
+            
+            # Add cell ID if it doesn't exist
+            if "id" not in cell["metadata"]:
+                cell["metadata"]["id"] = str(uuid.uuid4())
+        
+        return notebook_content
+
+    def find_cell_position(cells: list, cell_id: str) -> Optional[int]:
+        """Find the index of a cell by its ID"""
+        for i, cell in enumerate(cells):
+            if cell.get("metadata", {}).get("id") == cell_id:
+                return i
+        return None
+
+    def resolve_insert_position(cells: list, directive: DirectiveRequest) -> int:
+        """Resolve the position where to insert a new cell based on BEFORE/AFTER/POS"""
+        if directive.before:
+            # Insert before the specified cell
+            pos = find_cell_position(cells, directive.before)
+            if pos is not None:
+                return pos
+            else:
+                raise Exception(f"Cell ID '{directive.before}' not found for BEFORE positioning")
+        
+        elif directive.after:
+            # Insert after the specified cell
+            pos = find_cell_position(cells, directive.after)
+            if pos is not None:
+                return pos + 1
+            else:
+                raise Exception(f"Cell ID '{directive.after}' not found for AFTER positioning")
+        
+        elif directive.pos is not None:
+            # Direct position insertion (fallback)
+            if 0 <= directive.pos <= len(cells):
+                return directive.pos
+            else:
+                raise Exception(f"Position {directive.pos} is out of bounds (0-{len(cells)})")
+        
+        else:
+            raise Exception("No position specified for insert_cell (need BEFORE, AFTER, or POS)")
+
+    # Notebook modification helper functions
+    async def get_notebook_structure(notebook_path: str, notebook_manager) -> Optional[str]:
+        """Get a summary of notebook structure for AI context"""
+        try:
+            if not notebook_path or not notebook_manager.is_running():
+                return None
+            
+            # Read current notebook content
+            notebook_data = await get_notebook_content(notebook_path, notebook_manager)
+            notebook_content = notebook_data["content"]
+            
+            # Ensure all cells have IDs
+            notebook_content = ensure_cell_ids(notebook_content)
+            
+            # Build structure summary
+            cells = notebook_content.get("cells", [])
+            if not cells:
+                return f"Current notebook '{notebook_path}' is empty (0 cells)."
+            
+            structure_lines = [f"Current notebook structure ({len(cells)} cells):"]
+            
+            for i, cell in enumerate(cells):
+                cell_id = cell.get("metadata", {}).get("id", f"cell-{i}")
+                cell_type = cell.get("cell_type", "unknown")
+                
+                # Get first line of source for preview
+                source = cell.get("source", [])
+                if isinstance(source, list):
+                    preview = source[0] if source else ""
+                else:
+                    preview = str(source)
+                
+                # Truncate preview to reasonable length
+                preview = preview.strip()[:60]
+                if len(preview) == 60:
+                    preview += "..."
+                
+                structure_lines.append(f"- {cell_id}: [{cell_type}] {preview}")
+            
+            structure_lines.append(f"\nAvailable for BEFORE/AFTER references: {', '.join([cell.get('metadata', {}).get('id', f'cell-{i}') for i, cell in enumerate(cells)])}")
+            
+            return "\n".join(structure_lines)
+            
+        except Exception as e:
+            logging.error(f"Error getting notebook structure: {e}")
+            return None
+
+    async def insert_notebook_cell(directive: DirectiveRequest, notebook_manager) -> str:
+        """Insert a new cell into the notebook using BEFORE/AFTER or POS"""
+        try:
+            import uuid
+            import nbformat
+            
+            # Extract notebook path from session context
+            session_id = directive.session_id
+            if session_id:
+                notebook_path = extract_notebook_path_from_session(session_id)
+            else:
+                # Fallback: look for any open notebook in current directory
+                notebooks = [f for f in Path(".").glob("*.ipynb")]
+                if not notebooks:
+                    raise Exception("No notebook found - please open a specific notebook")
+                notebook_path = str(notebooks[0])  # Use first found notebook
+            
+            if not notebook_path:
+                raise Exception("Cannot determine notebook path from session context")
+            
+            logging.info(f"Working with notebook: {notebook_path}")
+            
+            # Read current notebook content
+            notebook_data = await get_notebook_content(notebook_path, notebook_manager)
+            notebook_content = notebook_data["content"]
+            
+            # Ensure all cells have IDs
+            notebook_content = ensure_cell_ids(notebook_content)
+            
+            # Resolve where to insert the new cell
+            cells = notebook_content.get("cells", [])
+            insert_position = resolve_insert_position(cells, directive)
+            
+            # Debug logging for newline investigation
+            logging.info(f"CELL CREATION - Directive code length: {len(directive.code) if directive.code else 0}")
+            logging.info(f"CELL CREATION - Code contains \\n: {'\\n' in directive.code if directive.code else False}")
+            logging.info(f"CELL CREATION - Code repr: {repr(directive.code[:100]) if directive.code else 'None'}")
+            
+            # Split code into lines for notebook format
+            source_lines = directive.code.split('\n') if directive.code else [""]
+            logging.info(f"CELL CREATION - Source lines count: {len(source_lines)}")
+            logging.info(f"CELL CREATION - First line: {repr(source_lines[0]) if source_lines else 'None'}")
+            
+            # Create new cell with UUID
+            new_cell = {
+                "cell_type": "code" if directive.language == "python" else "markdown",
+                "metadata": {
+                    "id": str(uuid.uuid4())
+                },
+                "source": source_lines
+            }
+            
+            # Add cell-specific fields based on type
+            if new_cell["cell_type"] == "code":
+                new_cell["execution_count"] = None
+                new_cell["outputs"] = []
+            
+            # Insert the new cell
+            cells.insert(insert_position, new_cell)
+            
+            # Write back to notebook
+            await write_notebook_content(notebook_path, notebook_content, notebook_manager)
+            
+            # Describe what happened
+            if directive.before:
+                position_desc = f"before cell {directive.before}"
+            elif directive.after:
+                position_desc = f"after cell {directive.after}"
+            else:
+                position_desc = f"at position {directive.pos}"
+            
+            return f"Cell inserted {position_desc} in {notebook_path}"
             
         except Exception as e:
             logging.error(f"Error inserting cell: {e}")
             raise Exception(f"Failed to insert cell: {e}")
     
-    async def edit_notebook_cell(cell_id: str, code: str, notebook_manager) -> str:
+    async def edit_notebook_cell(cell_id: str, code: str, notebook_manager, session_id: str = None) -> str:
         """Edit an existing cell in the notebook"""
         try:
-            logging.info(f"Edit cell requested: cell_id={cell_id}")
-            logging.info(f"New code: {code[:100]}...")  # Log first 100 chars
+            # Extract notebook path from session context
+            notebook_path = None
+            if session_id:
+                notebook_path = extract_notebook_path_from_session(session_id)
             
-            return f"Cell {cell_id} edited (placeholder implementation)"
+            if not notebook_path:
+                # Fallback: look for any open notebook in current directory
+                notebooks = [f for f in Path(".").glob("*.ipynb")]
+                if not notebooks:
+                    raise Exception("No notebook found - please open a specific notebook")
+                notebook_path = str(notebooks[0])
+            
+            logging.info(f"Editing cell {cell_id} in notebook: {notebook_path}")
+            
+            # Read current notebook content
+            notebook_data = await get_notebook_content(notebook_path, notebook_manager)
+            notebook_content = notebook_data["content"]
+            
+            # Ensure all cells have IDs
+            notebook_content = ensure_cell_ids(notebook_content)
+            
+            # Find the cell to edit
+            cells = notebook_content.get("cells", [])
+            cell_position = find_cell_position(cells, cell_id)
+            
+            if cell_position is None:
+                raise Exception(f"Cell ID '{cell_id}' not found")
+            
+            # Update the cell source
+            cell = cells[cell_position]
+            cell["source"] = code.split('\n') if code else [""]
+            
+            # Clear outputs for code cells when editing
+            if cell.get("cell_type") == "code":
+                cell["execution_count"] = None
+                cell["outputs"] = []
+            
+            # Write back to notebook
+            await write_notebook_content(notebook_path, notebook_content, notebook_manager)
+            
+            return f"Cell {cell_id} edited in {notebook_path}"
             
         except Exception as e:
             logging.error(f"Error editing cell: {e}")
             raise Exception(f"Failed to edit cell: {e}")
     
-    async def delete_notebook_cell(cell_id: str, notebook_manager) -> str:
+    async def delete_notebook_cell(cell_id: str, notebook_manager, session_id: str = None) -> str:
         """Delete a cell from the notebook"""
         try:
-            logging.info(f"Delete cell requested: cell_id={cell_id}")
+            # Extract notebook path from session context
+            notebook_path = None
+            if session_id:
+                notebook_path = extract_notebook_path_from_session(session_id)
             
-            return f"Cell {cell_id} deleted (placeholder implementation)"
+            if not notebook_path:
+                # Fallback: look for any open notebook in current directory
+                notebooks = [f for f in Path(".").glob("*.ipynb")]
+                if not notebooks:
+                    raise Exception("No notebook found - please open a specific notebook")
+                notebook_path = str(notebooks[0])
+            
+            logging.info(f"Deleting cell {cell_id} from notebook: {notebook_path}")
+            
+            # Read current notebook content
+            notebook_data = await get_notebook_content(notebook_path, notebook_manager)
+            notebook_content = notebook_data["content"]
+            
+            # Find the cell to delete
+            cells = notebook_content.get("cells", [])
+            cell_position = find_cell_position(cells, cell_id)
+            
+            if cell_position is None:
+                raise Exception(f"Cell ID '{cell_id}' not found")
+            
+            # Remove the cell
+            deleted_cell = cells.pop(cell_position)
+            
+            # Write back to notebook
+            await write_notebook_content(notebook_path, notebook_content, notebook_manager)
+            
+            return f"Cell {cell_id} deleted from {notebook_path}"
             
         except Exception as e:
             logging.error(f"Error deleting cell: {e}")
@@ -211,27 +601,6 @@ def create_app():
             'is_new': True
         }
 
-    # Data models for API
-    class ChatMessage(BaseModel):
-        message: str
-        session_id: str = None
-        notebook_path: str = None
-
-    class ChatResponse(BaseModel):
-        response: str
-        success: bool = True
-    
-    class DirectiveRequest(BaseModel):
-        id: str
-        tool: str
-        pos: Optional[int] = None
-        cell_id: Optional[str] = None
-        code: str
-        language: str = "python"
-    
-    class CreateNotebookRequest(BaseModel):
-        name: str
-
     # Health check endpoint
     @app.get("/health")
     async def health_check():
@@ -255,6 +624,7 @@ def create_app():
             
             # Get session ID (fallback to latest if not provided)
             session_id = message.session_id or get_latest_session()
+            logging.info(f"CHAT CONTEXT DEBUG - Session ID: {session_id}")
             
             # Load existing conversation context
             session_data = load_session_data(session_id)
@@ -269,8 +639,20 @@ def create_app():
                     context_lines.append(f"{role}: {content}")
                 conversation_context = "\n\n".join(context_lines)
             
-            # Generate response using LLM with conversation context
-            response_text = generate_response(message.message, conversation_context)
+            # Get notebook context if this is a notebook session
+            notebook_context = None
+            notebook_path = extract_notebook_path_from_session(session_id)
+            logging.info(f"CHAT CONTEXT DEBUG - Extracted notebook path: {notebook_path}")
+            if notebook_path:
+                notebook_context = await get_notebook_structure(notebook_path, notebook_manager)
+                logging.info(f"CHAT CONTEXT DEBUG - Notebook context length: {len(notebook_context) if notebook_context else 0}")
+                if notebook_context:
+                    logging.info(f"CHAT CONTEXT DEBUG - Notebook context preview: {notebook_context[:200]}...")
+            else:
+                logging.info(f"CHAT CONTEXT DEBUG - No notebook path found for session")
+            
+            # Generate response using LLM with conversation and notebook context
+            response_text = generate_response(message.message, conversation_context, notebook_context)
             
             # Add new messages to conversation
             timestamp = datetime.now().isoformat()
@@ -317,6 +699,7 @@ def create_app():
             
             # Get session ID (fallback to latest if not provided)
             session_id = message.session_id or get_latest_session()
+            logging.info(f"STREAM CONTEXT DEBUG - Session ID: {session_id}")
             
             # Load existing conversation context
             session_data = load_session_data(session_id)
@@ -331,6 +714,18 @@ def create_app():
                     context_lines.append(f"{role}: {content}")
                 conversation_context = "\n\n".join(context_lines)
             
+            # Get notebook context if this is a notebook session
+            notebook_context = None
+            notebook_path = extract_notebook_path_from_session(session_id)
+            logging.info(f"STREAM CONTEXT DEBUG - Extracted notebook path: {notebook_path}")
+            if notebook_path:
+                notebook_context = await get_notebook_structure(notebook_path, notebook_manager)
+                logging.info(f"STREAM CONTEXT DEBUG - Notebook context length: {len(notebook_context) if notebook_context else 0}")
+                if notebook_context:
+                    logging.info(f"STREAM CONTEXT DEBUG - Notebook context preview: {notebook_context[:200]}...")
+            else:
+                logging.info(f"STREAM CONTEXT DEBUG - No notebook path found for session")
+            
             def stream_response():
                 """Generator function for SSE streaming"""
                 try:
@@ -338,7 +733,7 @@ def create_app():
                     full_response = ""
                     
                     # Stream the response
-                    for chunk in llm.generate_response_stream(message.message, conversation_context):
+                    for chunk in llm.generate_response_stream(message.message, conversation_context, notebook_context):
                         full_response += chunk
                         # Send chunk as SSE
                         yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
@@ -532,6 +927,30 @@ def create_app():
             query_string = "&".join([f"{k}={v}" for k, v in query_params.items()])
             target_url += f"?{query_string}"
         
+        # Kernel protection: Check for blocked kernels and duplicate requests
+        if "api/kernels" in path:
+            # Extract kernel ID from path if present
+            kernel_id = None
+            path_parts = path.split('/')
+            if len(path_parts) >= 3 and path_parts[1] == "api" and path_parts[2] == "kernels":
+                if len(path_parts) >= 4:
+                    kernel_id = path_parts[3]
+            
+            # Create request key for deduplication
+            request_key = f"{request.method}:{path}:{kernel_id}"
+            
+            # Check for duplicate requests (rapid retries)
+            if kernel_protection.is_duplicate_request(request_key, window_seconds=0.5):
+                logging.info(f"BLOCKED DUPLICATE: {request_key}")
+                raise HTTPException(status_code=429, detail="Too many requests - duplicate detected")
+            
+            # Check if kernel should be blocked
+            if kernel_id and kernel_protection.should_block_kernel(kernel_id):
+                logging.info(f"BLOCKED KERNEL: {kernel_id} is temporarily blocked due to repeated failures")
+                raise HTTPException(status_code=503, detail=f"Kernel {kernel_id} temporarily unavailable")
+            
+            logging.info(f"KERNEL API: {request.method} {path} -> {target_url}")
+        
         # Get request body if present
         body = None
         if request.method in ["POST", "PUT", "PATCH"]:
@@ -552,6 +971,25 @@ def create_app():
                     content=body,
                     follow_redirects=False
                 )
+                
+                # Kernel protection: Handle failures
+                if "api/kernels" in path and response.status_code == 404:
+                    # Extract kernel ID and record failure
+                    path_parts = path.split('/')
+                    if len(path_parts) >= 4 and path_parts[1] == "api" and path_parts[2] == "kernels":
+                        kernel_id = path_parts[3]
+                        kernel_protection.record_kernel_failure(kernel_id)
+                        logging.warning(f"KERNEL 404: Recorded failure for kernel {kernel_id}")
+                
+                # Debug logging for kernel API responses
+                if "api/kernels" in path:
+                    logging.info(f"KERNEL API RESPONSE: {response.status_code} for {request.method} {path}")
+                    if response.status_code >= 400:
+                        try:
+                            response_text = await response.aread()
+                            logging.error(f"KERNEL API ERROR RESPONSE: {response_text}")
+                        except Exception:
+                            pass
                 
                 # Forward response headers (exclude problematic ones)
                 response_headers = {
@@ -672,9 +1110,7 @@ def create_app():
             if directive.tool == "insert_cell":
                 # Insert a new cell at the specified position
                 result_message = await insert_notebook_cell(
-                    directive.pos, 
-                    directive.code, 
-                    directive.language,
+                    directive,
                     notebook_manager
                 )
                 
@@ -683,14 +1119,16 @@ def create_app():
                 result_message = await edit_notebook_cell(
                     directive.cell_id,
                     directive.code,
-                    notebook_manager
+                    notebook_manager,
+                    directive.session_id
                 )
                 
             elif directive.tool == "delete_cell":
                 # Delete a cell
                 result_message = await delete_notebook_cell(
                     directive.cell_id,
-                    notebook_manager
+                    notebook_manager,
+                    directive.session_id
                 )
                 
             else:
@@ -793,6 +1231,19 @@ def create_app():
         if not notebook_manager.is_running():
             await websocket.close(code=1011, reason="Jupyter server not running")
             return
+        
+        # Kernel protection: Check if this kernel is blocked
+        if kernel_protection.should_block_kernel(kernel_id):
+            logging.info(f"BLOCKED WEBSOCKET: Kernel {kernel_id} is temporarily blocked")
+            await websocket.close(code=1011, reason=f"Kernel {kernel_id} temporarily unavailable")
+            return
+            
+        # Check for duplicate WebSocket requests (same kernel, rapid succession)
+        ws_request_key = f"WS:{kernel_id}"
+        if kernel_protection.is_duplicate_request(ws_request_key, window_seconds=2.0):
+            logging.info(f"BLOCKED DUPLICATE WEBSOCKET: {kernel_id}")
+            await websocket.close(code=1011, reason="Duplicate WebSocket connection blocked")
+            return
             
         # Get query parameters (especially session_id)
         query_params = dict(websocket.query_params)
@@ -804,6 +1255,9 @@ def create_app():
         if query_string:
             target_url += f"?{query_string}"
         
+        logging.info(f"WEBSOCKET CONNECTING: {target_url}")
+        logging.info(f"WEBSOCKET QUERY PARAMS: {query_params}")
+        
         upstream = None
         try:
             import websockets
@@ -811,7 +1265,8 @@ def create_app():
             
             await websocket.accept()
             
-            # Connect to upstream Jupyter server
+            # Connect to upstream Jupyter server - token already in URL
+            logging.info(f"WEBSOCKET FINAL URL: {target_url}")
             upstream = await websockets.connect(target_url)
             
             # Track connection state
@@ -857,6 +1312,15 @@ def create_app():
             )
                 
         except Exception as e:
+            # Enhanced error logging for WebSocket connection issues
+            logging.error(f"WEBSOCKET CONNECTION ERROR: {type(e).__name__}: {e}")
+            logging.error(f"WEBSOCKET FAILED URL: {target_url}")
+            
+            # Record kernel failure if it's a connection error (likely 404 or 403)
+            if any(code in str(e) for code in ["404", "403", "rejected", "forbidden"]):
+                kernel_protection.record_kernel_failure(kernel_id)
+                logging.warning(f"WEBSOCKET AUTH/404: Recorded failure for kernel {kernel_id}")
+            
             logging.error(f"Kernel WebSocket proxy error: {e}")
         finally:
             # Clean up connections
@@ -894,6 +1358,62 @@ def create_app():
             logging.info("Jupyter server stopped")
         except Exception as e:
             logging.error(f"Error stopping Jupyter server: {e}")
+
+    @app.get("/debug/jupyter-status")
+    async def debug_jupyter_status():
+        """Debug endpoint to check Jupyter server status and test kernel creation"""
+        if not notebook_manager.is_running():
+            return {"error": "Jupyter server not running"}
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Test basic API status
+                status_url = f"http://localhost:{notebook_manager.port}/jupyter/api/status?token={notebook_manager.token}"
+                status_response = await client.get(status_url)
+                
+                # Test kernel list
+                kernels_url = f"http://localhost:{notebook_manager.port}/jupyter/api/kernels?token={notebook_manager.token}"
+                kernels_response = await client.get(kernels_url)
+                
+                # Try creating a kernel
+                create_kernel_url = f"http://localhost:{notebook_manager.port}/jupyter/api/kernels?token={notebook_manager.token}"
+                create_response = await client.post(create_kernel_url, json={"name": "python3"})
+                
+                return {
+                    "jupyter_port": notebook_manager.port,
+                    "jupyter_token": notebook_manager.token,
+                    "protection_status": {
+                        "blocked_kernels": len(kernel_protection.blocked_kernels),
+                        "failed_kernels": len(kernel_protection.kernel_failures),
+                        "recent_requests": len(kernel_protection.recent_requests)
+                    },
+                    "status_check": {
+                        "status_code": status_response.status_code,
+                        "response": status_response.json() if status_response.status_code < 400 else status_response.text
+                    },
+                    "kernels_list": {
+                        "status_code": kernels_response.status_code,
+                        "response": kernels_response.json() if kernels_response.status_code < 400 else kernels_response.text
+                    },
+                    "create_kernel": {
+                        "status_code": create_response.status_code,
+                        "response": create_response.json() if create_response.status_code < 400 else create_response.text
+                    }
+                }
+        except Exception as e:
+            return {"error": f"Failed to test Jupyter API: {e}"}
+    
+    @app.post("/debug/clear-kernel-blocks")
+    async def clear_kernel_blocks():
+        """Clear all blocked kernels and reset protection state"""
+        kernel_protection.blocked_kernels.clear()
+        kernel_protection.kernel_failures.clear()
+        kernel_protection.recent_requests.clear()
+        
+        return {
+            "success": True,
+            "message": "All kernel blocks and protection state cleared"
+        }
 
     return app
 
