@@ -35,42 +35,68 @@ function renderMarkdownInElement(messageElement) {
     // Only render markdown for assistant messages
     if (messageElement.getAttribute('role') !== 'assistant') return;
     
+    console.log('🎨 RENDERING MARKDOWN for assistant message');
+    
     const rawContent = messageElement.textContent;
+    const groupId = messageElement.getAttribute('timestamp') || `group_${Date.now()}`;
+    console.log('🎨 Raw content:', rawContent);
+    
     if (typeof marked !== 'undefined' && rawContent.trim()) {
         try {
             // First, check for tool directives and parse them
-            const processedContent = processToolDirectives(rawContent);
+            const processedContent = processToolDirectives(rawContent, { groupId });
             
             // Then render the markdown
             const renderedHtml = marked.parse(processedContent);
             messageElement.innerHTML = '<div class="markdown-body">' + renderedHtml + '</div>';
+            console.log('🎨 MARKDOWN RENDERED SUCCESSFULLY');
         } catch (error) {
-            console.warn('Markdown rendering failed:', error);
+            console.warn('🎨 Markdown rendering failed:', error);
             // Keep original text content if rendering fails
         }
+    } else {
+        console.log('🎨 SKIPPING MARKDOWN: marked not available or no content');
     }
 }
 
-function processToolDirectives(markdownText) {
+function processToolDirectives(markdownText, { groupId } = {}) {
     // Pattern to match code block followed by tool directive
     const pattern = /```(\w+)?\n([\s\S]*?)\n```\s*\n\s*```\s*\n([\s\S]*?)\n```/g;
     
-    return markdownText.replace(pattern, function(match, language, code, metadata) {
+    console.log('🔧 PROCESSING TOOL DIRECTIVES');
+    console.log('🔧 Input text:', markdownText);
+    console.log('🔧 Pattern:', pattern);
+    
+    let matchCount = 0;
+    let seq = 0;
+    const result = markdownText.replace(pattern, function(match, language, code, metadata) {
+        matchCount++;
+        console.log(`🔧 MATCH ${matchCount}:`, { language, code: code?.substring(0, 100), metadata });
+        
         language = language || 'python';
         code = code.trim();
         metadata = metadata.trim();
         
         // Parse the metadata
         const directive = parseDirectiveMetadata(metadata, code, language);
+        console.log('🔧 PARSED DIRECTIVE:', directive);
         
         if (directive && validateDirective(directive)) {
+            // Attach ordering info for this assistant message group
+            directive.group_id = groupId || 'group_default';
+            directive.seq = seq++;
+            console.log('🔧 DIRECTIVE VALID - Creating HTML');
             return createDirectiveHTML(directive, code, language);
         } else {
             // Malformed directive - show error
-            console.error('Invalid tool directive:', metadata);
+            console.error('🔧 Invalid tool directive:', metadata);
             return createErrorHTML(code, language, `❌ MALFORMED TOOL DIRECTIVE: ${metadata}`);
         }
     });
+    
+    console.log(`🔧 Found ${matchCount} matches`);
+    console.log('🔧 Result:', result);
+    return result;
 }
 
 function parseDirectiveMetadata(metadata, code, language) {
@@ -216,16 +242,24 @@ function escapeHtml(text) {
 
 function renderAllMarkdown() {
     // Render markdown in all assistant messages on the page
+    console.log('🎨 RENDER ALL MARKDOWN: Starting');
     const assistantMessages = document.querySelectorAll('chat-msg[role="assistant"]');
-    assistantMessages.forEach(function(messageEl) {
+    console.log(`🎨 RENDER ALL MARKDOWN: Found ${assistantMessages.length} assistant messages`);
+    
+    assistantMessages.forEach(function(messageEl, index) {
+        console.log(`🎨 RENDER ALL MARKDOWN: Processing message ${index + 1}`);
         renderMarkdownInElement(messageEl);
     });
+    
+    console.log('🎨 RENDER ALL MARKDOWN: Complete');
 }
 
 // Auto-initialize for archived logs
 function initArchivedLog() {
+    console.log('🚀 INITIALIZING ARCHIVED LOG');
     initMarkdownRenderer();
     renderAllMarkdown();
+    console.log('🚀 ARCHIVED LOG INITIALIZED');
 }
 
 // Tool Directive Functions
@@ -255,6 +289,94 @@ async function approveDirective(directiveId) {
         if (result.success) {
             // Replace buttons with success status
             replaceDirectiveButtons(directiveId, true, result.message || 'Applied successfully');
+
+            // Try to refresh the embedded Jupyter notebook iframe so changes appear without manual reload
+            try {
+                const iframe = document.getElementById('notebook-iframe');
+                if (iframe) {
+                    // Give the backend a brief moment to finish any async follow-ups
+                    setTimeout(async () => {
+                        const win = iframe.contentWindow;
+                        if (!win) {
+                            console.log('No iframe contentWindow; skipping in-iframe refresh');
+                            return;
+                        }
+
+                        try {
+                            // Preferred: JupyterLab document reload (no navigation)
+                            if (win.jupyterapp?.commands?.execute) {
+                                try {
+                                    await win.jupyterapp.commands.execute('docmanager:reload');
+                                    console.log('🔄 JupyterLab docmanager:reload executed');
+                                    return;
+                                } catch {}
+                                try {
+                                    await win.jupyterapp.commands.execute('docmanager:revert');
+                                    console.log('🔄 JupyterLab docmanager:revert executed');
+                                    return;
+                                } catch {}
+                            }
+
+                            // Classic Notebook fallback: save, clear dirty flag, avoid prompt, then soft reload
+                            if (win.Jupyter?.notebook) {
+                                try {
+                                    // Best-effort save to clear dirty state
+                                    if (typeof win.Jupyter.notebook.save_notebook === 'function') {
+                                        try {
+                                            // Try to await save completion via promise or event; fallback timeout
+                                            await new Promise((resolve) => {
+                                                let resolved = false;
+                                                try {
+                                                    const ev = win.Jupyter.notebook.events;
+                                                    if (ev && typeof ev.one === 'function') {
+                                                        ev.one('notebook_saved.Notebook', () => { resolved = true; resolve(); });
+                                                    }
+                                                } catch {}
+                                                const maybe = win.Jupyter.notebook.save_notebook();
+                                                if (maybe && typeof maybe.then === 'function') {
+                                                    maybe.then(() => { if (!resolved) resolve(); }).catch(() => { if (!resolved) resolve(); });
+                                                }
+                                                // Fallback resolve
+                                                setTimeout(() => { if (!resolved) resolve(); }, 1200);
+                                            });
+                                            console.log('💾 Classic Notebook saved before reload');
+                                        } catch {}
+                                    }
+                                    if (typeof win.Jupyter.notebook.set_dirty === 'function') {
+                                        win.Jupyter.notebook.set_dirty(false);
+                                    }
+                                    win.Jupyter.notebook.dirty = false;
+                                } catch {}
+                                // Temporarily suppress beforeunload prompts by blocking listeners
+                                const stopper = (ev) => {
+                                    try { ev.stopImmediatePropagation?.(); } catch {}
+                                };
+                                try { win.addEventListener('beforeunload', stopper, true); } catch {}
+                                try { win.onbeforeunload = null; } catch {}
+                                try {
+                                    win.location.reload();
+                                    console.log('🔄 Classic Notebook location.reload()');
+                                } catch (e) {
+                                    console.warn('Classic Notebook reload failed', e);
+                                }
+                                // Clean up stopper shortly after
+                                setTimeout(() => { try { win.removeEventListener('beforeunload', stopper, true); } catch {} }, 2000);
+                                return;
+                            }
+
+                            // Last resort: attempt a simple in-frame reload
+                            try { win.onbeforeunload = null; } catch {}
+                            try { win.location.reload(); } catch {}
+                        } catch (e) {
+                            console.warn('In-iframe refresh failed:', e);
+                        }
+                    }, 150);
+                } else {
+                    console.log('No notebook iframe found; skipping iframe refresh');
+                }
+            } catch (e) {
+                console.warn('Notebook iframe refresh skipped due to error:', e);
+            }
         } else {
             throw new Error(result.error || 'Unknown error occurred');
         }

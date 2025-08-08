@@ -8,10 +8,10 @@ import os
 import logging
 import traceback
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
 from langchain_openai import ChatOpenAI
-from langchain.schema import HumanMessage, SystemMessage
+from langchain.schema import HumanMessage, SystemMessage, AIMessage
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -96,19 +96,18 @@ class LLMInterface:
             # Use fallback prompt
             self.system_prompt = "You are a helpful AI assistant for Jupyter notebooks."
     
-    def generate_response(self, user_message: str, conversation_context: Optional[str] = None, notebook_context: Optional[str] = None) -> str:
+    def generate_response(self, messages: List[Dict[str, str]], user_message: Optional[str] = None) -> str:
         """
-        Generate a response using the LLM.
-        No hidden state - all context must be provided explicitly.
+        Generate a response using the LLM with linear conversation history.
+        No hidden state - all context must be provided explicitly via messages.
         
         Args:
-            user_message: The user's message
-            conversation_context: Optional conversation history (from HTML log)
-            notebook_context: Optional current notebook structure
+            messages: Complete linear conversation history (role, content pairs)
+            user_message: Optional - if provided, added as final user message
             
         Returns:
-            The LLM's response as a string
-            
+            Generated response text
+        
         Raises:
             Exception: If the LLM call fails (fail early principle)
         """
@@ -116,14 +115,21 @@ class LLMInterface:
             if not self.client:
                 raise RuntimeError("LLM client not initialized")
             
-            # Build messages - no hidden state, everything explicit
-            messages = self._build_messages(user_message, conversation_context, notebook_context)
+            # Add final user message if provided
+            conversation_messages = messages.copy()
+            if user_message:
+                conversation_messages.append({'role': 'user', 'content': user_message})
+            
+            logger.info(f"Generating response with {len(conversation_messages)} messages in conversation")
+            
+            # Convert to LangChain message objects
+            langchain_messages = self._convert_to_langchain_messages(conversation_messages)
             
             logger.info(f"Sending request to {self.model_name}")
-            logger.debug(f"User message: {user_message}")
+            logger.debug(f"Total messages: {len(langchain_messages)}")
             
             # Make the API call
-            response = self.client(messages)
+            response = self.client(langchain_messages)
             
             response_text = response.content.strip()
             logger.info(f"Received response ({len(response_text)} chars)")
@@ -134,20 +140,19 @@ class LLMInterface:
         except Exception as e:
             # Fail early and often - complete error logging with stack traces
             logger.error(f"LLM generation failed: {e}")
-            logger.error(f"User message: {user_message}")
+            logger.error(f"Messages count: {len(messages)}")
             logger.error(f"Model: {self.model_name}")
             logger.error(traceback.format_exc())
             raise
 
-    def generate_response_stream(self, user_message: str, conversation_context: Optional[str] = None, notebook_context: Optional[str] = None):
+    def generate_response_stream(self, messages: List[Dict[str, str]], user_message: Optional[str] = None):
         """
-        Generate a streaming response using the LLM.
+        Generate a streaming response using the LLM with linear conversation history.
         Yields chunks as they arrive from the LLM.
         
         Args:
-            user_message: The user's message
-            conversation_context: Optional conversation history (from HTML log)
-            notebook_context: Optional current notebook structure
+            messages: Complete linear conversation history (role, content pairs)
+            user_message: Optional - if provided, added as final user message
             
         Yields:
             String chunks of the response as they arrive
@@ -159,14 +164,21 @@ class LLMInterface:
             if not self.client:
                 raise RuntimeError("LLM client not initialized")
             
-            # Build messages - no hidden state, everything explicit
-            messages = self._build_messages(user_message, conversation_context, notebook_context)
+            # Add final user message if provided
+            conversation_messages = messages.copy()
+            if user_message:
+                conversation_messages.append({'role': 'user', 'content': user_message})
+            
+            logger.info(f"Generating streaming response with {len(conversation_messages)} messages in conversation")
+            
+            # Convert to LangChain message objects
+            langchain_messages = self._convert_to_langchain_messages(conversation_messages)
             
             logger.info(f"Sending streaming request to {self.model_name}")
-            logger.debug(f"User message: {user_message}")
+            logger.debug(f"Total messages: {len(langchain_messages)}")
             
             # Make the streaming API call
-            for chunk in self.client.stream(messages):
+            for chunk in self.client.stream(langchain_messages):
                 if chunk.content:
                     yield chunk.content
             
@@ -175,36 +187,35 @@ class LLMInterface:
         except Exception as e:
             # Fail early and often - complete error logging with stack traces
             logger.error(f"LLM streaming failed: {e}")
-            logger.error(f"User message: {user_message}")
+            logger.error(f"Messages count: {len(messages)}")
             logger.error(f"Model: {self.model_name}")
             logger.error(traceback.format_exc())
             raise
 
-    def _build_messages(self, user_message: str, conversation_context: Optional[str] = None, notebook_context: Optional[str] = None):
+    def _convert_to_langchain_messages(self, messages: List[Dict[str, str]]):
         """
-        Build message list for LLM calls.
-        Extracted into helper method to avoid duplication between streaming and regular calls.
+        Convert linear conversation messages to LangChain message objects.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys
+            
+        Returns:
+            List of LangChain message objects
         """
-        messages = []
+        langchain_messages = []
         
-        # Add system prompt
-        if self.system_prompt:
-            messages.append(SystemMessage(content=self.system_prompt))
+        for msg in messages:
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            
+            if role == 'system':
+                langchain_messages.append(SystemMessage(content=content))
+            elif role == 'assistant':
+                langchain_messages.append(AIMessage(content=content))
+            else:  # 'user' or any other role
+                langchain_messages.append(HumanMessage(content=content))
         
-        # Add notebook structure context if provided
-        if notebook_context:
-            notebook_message = f"Current notebook context:\n{notebook_context}\n\n"
-            messages.append(SystemMessage(content=notebook_message))
-        
-        # Add conversation context if provided
-        if conversation_context:
-            context_message = f"Previous conversation context:\n{conversation_context}\n\n"
-            messages.append(SystemMessage(content=context_message))
-        
-        # Add current user message
-        messages.append(HumanMessage(content=user_message))
-        
-        return messages
+        return langchain_messages
     
     def reload_prompt(self, prompt_file: str = "system_prompt.txt"):
         """
@@ -239,7 +250,9 @@ def get_llm_interface() -> LLMInterface:
 
 def generate_response(user_message: str, conversation_context: Optional[str] = None, notebook_context: Optional[str] = None) -> str:
     """
-    Convenience function for generating responses.
+    LEGACY: Convenience function for generating responses with old system injection approach.
+    
+    This is maintained for backward compatibility but will be replaced by linear conversation architecture.
     
     Args:
         user_message: The user's message
@@ -250,4 +263,23 @@ def generate_response(user_message: str, conversation_context: Optional[str] = N
         The LLM's response
     """
     llm = get_llm_interface()
-    return llm.generate_response(user_message, conversation_context, notebook_context) 
+    
+    # Build legacy-style messages with system injection for backward compatibility
+    messages = []
+    
+    # Add system prompt
+    if llm.system_prompt:
+        messages.append({'role': 'system', 'content': llm.system_prompt})
+    
+    # Add notebook context as system message if provided
+    if notebook_context:
+        notebook_message = f"Current notebook context:\n{notebook_context}\n\n"
+        messages.append({'role': 'system', 'content': notebook_message})
+    
+    # Add conversation context as system message if provided
+    if conversation_context:
+        context_message = f"Previous conversation context:\n{conversation_context}\n\n"
+        messages.append({'role': 'system', 'content': context_message})
+    
+    # Use new interface with legacy message structure
+    return llm.generate_response(messages, user_message) 

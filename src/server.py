@@ -29,12 +29,19 @@ class JupyterRepetitiveFilter(logging.Filter):
             
             # Only suppress these specific repetitive patterns
             repetitive_patterns = [
-                '/checkpoints?',                    # Checkpoint polling every 2s
-                '/contents?content=1&hash=0&',      # File system monitoring  
-                '/kernels?',                        # Kernel status polling
-                '/sessions?',                       # Session status polling
-                '/kernelspecs?',                    # Kernel specs polling
-                '/me?',                             # User info polling
+                '/checkpoints?',
+                '/contents?content=1&hash=0&',
+                '/contents?type=notebook&content=1',
+                '/contents?content=0&hash=1&',
+                '/kernels?',
+                '/sessions?',
+                '/kernelspecs?',
+                '/me?',
+                '/lab/api/settings',
+                '/lab/api/translations',
+                '/lsp/status',
+                '/lab/extensions/',
+                '/static/notebook/',
             ]
             
             # Suppress if it's a GET request matching these patterns
@@ -152,6 +159,8 @@ def create_app():
         cell_id: Optional[str] = None
         before: Optional[str] = None
         after: Optional[str] = None
+        group_id: Optional[str] = None
+        seq: Optional[int] = None
         code: str
         language: str = "python"
         session_id: Optional[str] = None  # Add session context
@@ -207,7 +216,7 @@ def create_app():
         return None
 
     async def get_notebook_content(notebook_path: str, notebook_manager) -> dict:
-        """Read notebook content via Jupyter Contents API"""
+        """Read notebook content via Jupyter Contents API and return actual .ipynb content"""
         try:
             if not notebook_manager.is_running():
                 raise Exception("Jupyter server not running")
@@ -219,7 +228,10 @@ def create_app():
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
-                return response.json()
+                contents_response = response.json()
+                
+                # Extract and return the actual .ipynb content (not the wrapper)
+                return contents_response["content"]
                 
         except Exception as e:
             logging.error(f"Error reading notebook {notebook_path}: {e}")
@@ -231,6 +243,9 @@ def create_app():
             if not notebook_manager.is_running():
                 raise Exception("Jupyter server not running")
             
+            # Ensure all cells have IDs before writing (prevents nbformat warnings)
+            content_with_ids = ensure_cell_ids(content)
+            
             # Use Jupyter Contents API to write the notebook
             url = f"http://localhost:{notebook_manager.port}/jupyter/api/contents/{notebook_path}"
             params = {"token": notebook_manager.token}
@@ -239,7 +254,7 @@ def create_app():
             api_content = {
                 "type": "notebook",
                 "format": "json",
-                "content": content
+                "content": content_with_ids
             }
             
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -251,26 +266,59 @@ def create_app():
             logging.error(f"Error writing notebook {notebook_path}: {e}")
             raise Exception(f"Failed to write notebook: {e}")
 
+    async def trigger_notebook_refresh(notebook_path: str, notebook_manager):
+        """Trigger Jupyter UI to refresh notebook content by sending file change event"""
+        try:
+            if not notebook_manager.is_running():
+                return
+            
+            # Send file change event to Jupyter to trigger UI refresh
+            # This mimics what Jupyter does when files are modified externally
+            import json
+            
+            # Simpler approach: Just touch the Contents API to trigger refresh
+            # This should signal to Jupyter UI that the file has changed
+            contents_url = f"http://localhost:{notebook_manager.port}/jupyter/api/contents/{notebook_path}"
+            params = {"token": notebook_manager.token}
+            
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(contents_url, params=params)
+                response.raise_for_status()
+                logging.info(f"Triggered notebook refresh by touching Contents API for {notebook_path}")
+                
+        except Exception as e:
+            # Don't fail the whole operation if refresh fails
+            logging.warning(f"Failed to trigger notebook refresh: {e}")
+
     def ensure_cell_ids(notebook_content: dict) -> dict:
-        """Ensure all cells have stable UUIDs in metadata"""
+        """Ensure all cells have stable UUIDs in the format expected by nbformat"""
         import uuid
         
         cells = notebook_content.get("cells", [])
         
         for cell in cells:
+            # Check if cell already has a valid top-level ID
+            if "id" not in cell or not cell["id"]:
+                # Generate a new ID in the format nbformat expects (short hex string)
+                cell["id"] = str(uuid.uuid4()).replace("-", "")[:8]
+                
+            # Ensure metadata exists
             if "metadata" not in cell:
                 cell["metadata"] = {}
-            
-            # Add cell ID if it doesn't exist
+                
+            # Also add ID to metadata for backward compatibility
             if "id" not in cell["metadata"]:
-                cell["metadata"]["id"] = str(uuid.uuid4())
+                cell["metadata"]["id"] = cell["id"]
         
+        logging.info(f"Ensured cell IDs for {len(cells)} cells")
         return notebook_content
 
     def find_cell_position(cells: list, cell_id: str) -> Optional[int]:
-        """Find the index of a cell by its ID"""
+        """Find the index of a cell by its ID (checks both top-level and metadata locations)"""
         for i, cell in enumerate(cells):
-            if cell.get("metadata", {}).get("id") == cell_id:
+            # Check for ID in multiple locations (notebook format variations)
+            current_id = cell.get("id") or cell.get("metadata", {}).get("id")
+            if current_id == cell_id:
                 return i
         return None
 
@@ -288,7 +336,24 @@ def create_app():
             # Insert after the specified cell
             pos = find_cell_position(cells, directive.after)
             if pos is not None:
-                return pos + 1
+                base = pos + 1
+                # If group info provided, maintain emission order for same-group AFTERs
+                if directive.group_id is not None and directive.seq is not None:
+                    index = base
+                    while index < len(cells):
+                        meta = cells[index].get("metadata", {})
+                        nbmeta = meta.get("nbscribe", {}) if isinstance(meta.get("nbscribe", {}), dict) else {}
+                        if (nbmeta.get("anchor_type") == "AFTER" and
+                            nbmeta.get("anchor_id") == directive.after and
+                            nbmeta.get("group_id") == directive.group_id and
+                            isinstance(nbmeta.get("seq"), int) and
+                            nbmeta.get("seq") < directive.seq):
+                            index += 1
+                            continue
+                        # Stop if we hit an item from same group but with seq >= ours, or a different anchor/group
+                        break
+                    return index
+                return base
             else:
                 raise Exception(f"Cell ID '{directive.after}' not found for AFTER positioning")
         
@@ -310,8 +375,7 @@ def create_app():
                 return None
             
             # Read current notebook content
-            notebook_data = await get_notebook_content(notebook_path, notebook_manager)
-            notebook_content = notebook_data["content"]
+            notebook_content = await get_notebook_content(notebook_path, notebook_manager)
             
             # Ensure all cells have IDs
             notebook_content = ensure_cell_ids(notebook_content)
@@ -372,8 +436,7 @@ def create_app():
             logging.info(f"Working with notebook: {notebook_path}")
             
             # Read current notebook content
-            notebook_data = await get_notebook_content(notebook_path, notebook_manager)
-            notebook_content = notebook_data["content"]
+            notebook_content = await get_notebook_content(notebook_path, notebook_manager)
             
             # Ensure all cells have IDs
             notebook_content = ensure_cell_ids(notebook_content)
@@ -387,16 +450,41 @@ def create_app():
             logging.info(f"CELL CREATION - Code contains \\n: {'\\n' in directive.code if directive.code else False}")
             logging.info(f"CELL CREATION - Code repr: {repr(directive.code[:100]) if directive.code else 'None'}")
             
-            # Split code into lines for notebook format
-            source_lines = directive.code.split('\n') if directive.code else [""]
+            # Split code into lines for notebook format (Jupyter expects lines with \n endings)
+            if directive.code:
+                lines = directive.code.split('\n')
+                # Add \n to all lines except empty ones, preserving Jupyter notebook format
+                source_lines = []
+                for i, line in enumerate(lines):
+                    if i == len(lines) - 1 and line == "":
+                        # Skip empty last line (result of trailing \n in original code)
+                        continue
+                    elif i == len(lines) - 1:
+                        # Last non-empty line doesn't get \n
+                        source_lines.append(line)
+                    else:
+                        # All other lines get \n
+                        source_lines.append(line + "\n")
+            else:
+                source_lines = [""]
+                
             logging.info(f"CELL CREATION - Source lines count: {len(source_lines)}")
             logging.info(f"CELL CREATION - First line: {repr(source_lines[0]) if source_lines else 'None'}")
+            logging.info(f"CELL CREATION - Last line: {repr(source_lines[-1]) if source_lines else 'None'}")
             
-            # Create new cell with UUID
+            # Create new cell with consistent ID format
+            cell_id = str(uuid.uuid4()).replace("-", "")[:8]
             new_cell = {
                 "cell_type": "code" if directive.language == "python" else "markdown",
+                "id": cell_id,  # Top-level ID (nbformat standard)
                 "metadata": {
-                    "id": str(uuid.uuid4())
+                    "id": cell_id,  # Also in metadata for compatibility
+                    "nbscribe": {
+                        **({"group_id": directive.group_id, "seq": directive.seq} if directive.group_id is not None and directive.seq is not None else {}),
+                        **({"anchor_type": "AFTER", "anchor_id": directive.after} if directive.after else {}),
+                        **({"anchor_type": "BEFORE", "anchor_id": directive.before} if (not directive.after and directive.before) else {}),
+                        **({"anchor_type": "POS", "anchor_pos": directive.pos} if (directive.after is None and directive.before is None and directive.pos is not None) else {})
+                    }
                 },
                 "source": source_lines
             }
@@ -412,13 +500,16 @@ def create_app():
             # Write back to notebook
             await write_notebook_content(notebook_path, notebook_content, notebook_manager)
             
-            # Describe what happened
+            # Trigger notebook refresh in Jupyter UI
+            await trigger_notebook_refresh(notebook_path, notebook_manager)
+            
+            # Describe what happened (always include actual position for post-modification lookup)
             if directive.before:
-                position_desc = f"before cell {directive.before}"
+                position_desc = f"before cell {directive.before} at position {insert_position}"
             elif directive.after:
-                position_desc = f"after cell {directive.after}"
+                position_desc = f"after cell {directive.after} at position {insert_position}"
             else:
-                position_desc = f"at position {directive.pos}"
+                position_desc = f"at position {insert_position}"
             
             return f"Cell inserted {position_desc} in {notebook_path}"
             
@@ -444,8 +535,7 @@ def create_app():
             logging.info(f"Editing cell {cell_id} in notebook: {notebook_path}")
             
             # Read current notebook content
-            notebook_data = await get_notebook_content(notebook_path, notebook_manager)
-            notebook_content = notebook_data["content"]
+            notebook_content = await get_notebook_content(notebook_path, notebook_manager)
             
             # Ensure all cells have IDs
             notebook_content = ensure_cell_ids(notebook_content)
@@ -468,6 +558,9 @@ def create_app():
             
             # Write back to notebook
             await write_notebook_content(notebook_path, notebook_content, notebook_manager)
+            
+            # Trigger notebook refresh in Jupyter UI
+            await trigger_notebook_refresh(notebook_path, notebook_manager)
             
             return f"Cell {cell_id} edited in {notebook_path}"
             
@@ -493,8 +586,7 @@ def create_app():
             logging.info(f"Deleting cell {cell_id} from notebook: {notebook_path}")
             
             # Read current notebook content
-            notebook_data = await get_notebook_content(notebook_path, notebook_manager)
-            notebook_content = notebook_data["content"]
+            notebook_content = await get_notebook_content(notebook_path, notebook_manager)
             
             # Find the cell to delete
             cells = notebook_content.get("cells", [])
@@ -508,6 +600,9 @@ def create_app():
             
             # Write back to notebook
             await write_notebook_content(notebook_path, notebook_content, notebook_manager)
+            
+            # Trigger notebook refresh in Jupyter UI
+            await trigger_notebook_refresh(notebook_path, notebook_manager)
             
             return f"Cell {cell_id} deleted from {notebook_path}"
             
@@ -619,40 +714,31 @@ def create_app():
         """
         try:
             # Import here to avoid circular imports and lazy loading
-            from src.llm_interface import generate_response
+            from src.llm_interface import get_llm_interface
             from src.conversation_logger import ConversationLogger
+            from src.conversation_manager import get_conversation_manager
             
             # Get session ID (fallback to latest if not provided)
             session_id = message.session_id or get_latest_session()
-            logging.info(f"CHAT CONTEXT DEBUG - Session ID: {session_id}")
+            logging.info(f"CHAT LINEAR DEBUG - Session ID: {session_id}")
             
             # Load existing conversation context
             session_data = load_session_data(session_id)
             
-            # Format conversation context for LLM
-            conversation_context = ""
-            if session_data['messages']:
-                context_lines = []
-                for msg in session_data['messages']:
-                    role = msg['role'].title()
-                    content = msg['content']
-                    context_lines.append(f"{role}: {content}")
-                conversation_context = "\n\n".join(context_lines)
+            # Use linear conversation architecture
+            conv_manager = get_conversation_manager()
+            llm = get_llm_interface()
             
-            # Get notebook context if this is a notebook session
-            notebook_context = None
-            notebook_path = extract_notebook_path_from_session(session_id)
-            logging.info(f"CHAT CONTEXT DEBUG - Extracted notebook path: {notebook_path}")
-            if notebook_path:
-                notebook_context = await get_notebook_structure(notebook_path, notebook_manager)
-                logging.info(f"CHAT CONTEXT DEBUG - Notebook context length: {len(notebook_context) if notebook_context else 0}")
-                if notebook_context:
-                    logging.info(f"CHAT CONTEXT DEBUG - Notebook context preview: {notebook_context[:200]}...")
-            else:
-                logging.info(f"CHAT CONTEXT DEBUG - No notebook path found for session")
+            # Build linear conversation messages from session data
+            linear_messages = conv_manager.build_linear_conversation(
+                session_data['messages'], 
+                llm.system_prompt or "You are a helpful AI assistant for Jupyter notebooks."
+            )
             
-            # Generate response using LLM with conversation and notebook context
-            response_text = generate_response(message.message, conversation_context, notebook_context)
+            logging.info(f"CHAT LINEAR DEBUG - Built linear conversation with {len(linear_messages)} messages")
+            
+            # Generate response using new linear conversation interface
+            response_text = llm.generate_response(linear_messages, message.message)
             
             # Add new messages to conversation
             timestamp = datetime.now().isoformat()
@@ -680,7 +766,6 @@ def create_app():
         except Exception as e:
             # Log the full error with stack trace for debugging
             import traceback
-            import logging
             logger = logging.getLogger(__name__)
             logger.error(f"Chat endpoint error: {e}")
             logger.error(traceback.format_exc())
@@ -696,35 +781,26 @@ def create_app():
         try:
             from src.llm_interface import get_llm_interface
             from src.conversation_logger import ConversationLogger
+            from src.conversation_manager import get_conversation_manager
             
             # Get session ID (fallback to latest if not provided)
             session_id = message.session_id or get_latest_session()
-            logging.info(f"STREAM CONTEXT DEBUG - Session ID: {session_id}")
+            logging.info(f"STREAM LINEAR DEBUG - Session ID: {session_id}")
             
             # Load existing conversation context
             session_data = load_session_data(session_id)
             
-            # Format conversation context for LLM
-            conversation_context = ""
-            if session_data['messages']:
-                context_lines = []
-                for msg in session_data['messages']:
-                    role = msg['role'].title()
-                    content = msg['content']
-                    context_lines.append(f"{role}: {content}")
-                conversation_context = "\n\n".join(context_lines)
+            # Use linear conversation architecture
+            conv_manager = get_conversation_manager()
+            llm = get_llm_interface()
             
-            # Get notebook context if this is a notebook session
-            notebook_context = None
-            notebook_path = extract_notebook_path_from_session(session_id)
-            logging.info(f"STREAM CONTEXT DEBUG - Extracted notebook path: {notebook_path}")
-            if notebook_path:
-                notebook_context = await get_notebook_structure(notebook_path, notebook_manager)
-                logging.info(f"STREAM CONTEXT DEBUG - Notebook context length: {len(notebook_context) if notebook_context else 0}")
-                if notebook_context:
-                    logging.info(f"STREAM CONTEXT DEBUG - Notebook context preview: {notebook_context[:200]}...")
-            else:
-                logging.info(f"STREAM CONTEXT DEBUG - No notebook path found for session")
+            # Build linear conversation messages from session data
+            linear_messages = conv_manager.build_linear_conversation(
+                session_data['messages'], 
+                llm.system_prompt or "You are a helpful AI assistant for Jupyter notebooks."
+            )
+            
+            logging.info(f"STREAM LINEAR DEBUG - Built linear conversation with {len(linear_messages)} messages")
             
             def stream_response():
                 """Generator function for SSE streaming"""
@@ -732,8 +808,8 @@ def create_app():
                     llm = get_llm_interface()
                     full_response = ""
                     
-                    # Stream the response
-                    for chunk in llm.generate_response_stream(message.message, conversation_context, notebook_context):
+                    # Stream the response using new linear conversation interface
+                    for chunk in llm.generate_response_stream(linear_messages, message.message):
                         full_response += chunk
                         # Send chunk as SSE
                         yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
@@ -762,7 +838,6 @@ def create_app():
                     
                 except Exception as e:
                     import traceback
-                    import logging
                     logger = logging.getLogger(__name__)
                     logger.error(f"Streaming error: {e}")
                     logger.error(traceback.format_exc())
@@ -783,7 +858,6 @@ def create_app():
         except Exception as e:
             # Log the full error with stack trace for debugging
             import traceback
-            import logging
             logger = logging.getLogger(__name__)
             logger.error(f"Streaming endpoint error: {e}")
             logger.error(traceback.format_exc())
@@ -830,19 +904,59 @@ def create_app():
         session_id = f"notebook_{notebook_path.replace('/', '_').replace('.', '_')}"
         session_data = load_session_data(session_id)
         
-        # Update greeting for notebook context
+        # For new notebook sessions, inject complete notebook JSON and greeting
         if session_data['is_new']:
-            initial_message = {
-                'role': 'assistant',
-                'content': f"Hello! I'm ready to help you with `{notebook_file.name}`. I can analyze your notebook and suggest code edits. What would you like to work on?",
-                'timestamp': datetime.now().isoformat()
-            }
-            session_data['messages'] = [initial_message]
-            
-            # Save updated greeting
-            from src.conversation_logger import ConversationLogger
-            logger = ConversationLogger()
-            logger.save_conversation_state(session_data['log_file'], session_data['messages'])
+            try:
+                # Get the complete notebook JSON
+                notebook_content = await get_notebook_content(notebook_path, notebook_manager)
+                if notebook_content:
+                    from src.conversation_manager import get_conversation_manager
+                    conv_manager = get_conversation_manager()
+                    
+                    # Create initial notebook JSON message as User message
+                    notebook_json_message = {
+                        'role': 'user',
+                        'content': conv_manager.format_notebook_for_ai(notebook_content),
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    
+                    # Create assistant greeting that acknowledges seeing the notebook
+                    notebook_cell_count = len(notebook_content.get('cells', []))
+                    initial_message = {
+                        'role': 'assistant',
+                        'content': f"Hello! I can see your notebook `{notebook_file.name}` with {notebook_cell_count} cells. I understand the current structure and I'm ready to help you analyze, modify, or extend your code. What would you like to work on?",
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    
+                    # Set the messages in proper order: notebook JSON first, then greeting
+                    session_data['messages'] = [notebook_json_message, initial_message]
+                else:
+                    # Fallback if we can't read the notebook
+                    initial_message = {
+                        'role': 'assistant',
+                        'content': f"Hello! I'm ready to help you with `{notebook_file.name}`. I can analyze your notebook and suggest code edits. What would you like to work on?",
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    session_data['messages'] = [initial_message]
+                
+                # Save updated conversation
+                from src.conversation_logger import ConversationLogger
+                logger = ConversationLogger()
+                logger.save_conversation_state(session_data['log_file'], session_data['messages'])
+                
+            except Exception as e:
+                logging.error(f"Error initializing notebook session: {e}")
+                # Fallback to simple greeting
+                initial_message = {
+                    'role': 'assistant',
+                    'content': f"Hello! I'm ready to help you with `{notebook_file.name}`. I can analyze your notebook and suggest code edits. What would you like to work on?",
+                    'timestamp': datetime.now().isoformat()
+                }
+                session_data['messages'] = [initial_message]
+                
+                from src.conversation_logger import ConversationLogger
+                logger = ConversationLogger()
+                logger.save_conversation_state(session_data['log_file'], session_data['messages'])
         
         return templates.TemplateResponse("chat.html", {
             "request": request,
@@ -905,10 +1019,310 @@ def create_app():
             logging.error(f"Error getting system prompt: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-    # Jupyter proxy routes - must be added before other routes to avoid conflicts
+    # Debug route to test if our routing is working
+    @app.get("/debug/websocket-routes")
+    async def debug_websocket_routes():
+        """Debug endpoint to check WebSocket routes"""
+        routes = []
+        for route in app.routes:
+            routes.append({
+                "path": getattr(route, 'path', str(route)),
+                "methods": getattr(route, 'methods', []),
+                "type": type(route).__name__
+            })
+        return {"routes": routes}
+
+    # WebSocket proxy endpoints - MUST be defined before HTTP proxy to take precedence
+    @app.websocket("/jupyter/api/events/subscribe") 
+    async def jupyter_events_websocket(websocket: WebSocket):
+        """Proxy WebSocket for Jupyter event subscriptions"""
+        try:
+            logging.info(f"📡 EVENTS WEBSOCKET HANDLER CALLED")
+            logging.info(f"📡 EVENTS WEBSOCKET QUERY PARAMS: {dict(websocket.query_params)}")
+            
+            if not notebook_manager.is_running():
+                logging.error("📡 EVENTS WEBSOCKET REJECTED: Jupyter server not running")
+                await websocket.close(code=1011, reason="Jupyter server not running")
+                return
+        except Exception as e:
+            logging.error(f"📡 EVENTS WEBSOCKET HANDLER ERROR: {e}")
+            logging.exception("Full traceback:")
+            try:
+                await websocket.close(code=1011, reason="Handler error")
+            except:
+                pass
+            return
+            
+        # Ensure token is included for events WebSocket
+        target_url = f"ws://localhost:{notebook_manager.port}/jupyter/api/events/subscribe?token={notebook_manager.token}"
+        
+        upstream = None
+        try:
+            import websockets
+            import asyncio
+            
+            await websocket.accept()
+            
+            # Connect to upstream Jupyter server
+            upstream = await websockets.connect(target_url)
+            
+            # Track connection state
+            client_closed = asyncio.Event()
+            upstream_closed = asyncio.Event()
+            
+            async def forward_to_upstream():
+                try:
+                    while not client_closed.is_set() and not upstream_closed.is_set():
+                        message = await websocket.receive_text()
+                        if not upstream_closed.is_set():
+                            await upstream.send(message)
+                except WebSocketDisconnect:
+                    client_closed.set()
+                except websockets.exceptions.ConnectionClosed:
+                    upstream_closed.set()
+                except Exception as e:
+                    logging.error(f"Events forward to upstream error: {e}")
+                    client_closed.set()
+                    upstream_closed.set()
+            
+            async def forward_to_client():
+                try:
+                    async for message in upstream:
+                        if not client_closed.is_set():
+                            try:
+                                await websocket.send_text(message)
+                            except Exception:
+                                # Client disconnected while sending
+                                client_closed.set()
+                                break
+                except websockets.exceptions.ConnectionClosed:
+                    upstream_closed.set()
+                except Exception as e:
+                    logging.error(f"Events forward to client error: {e}")
+                    upstream_closed.set()
+            
+            # Run both forwarding tasks with proper cleanup
+            await asyncio.gather(
+                forward_to_upstream(), 
+                forward_to_client(),
+                return_exceptions=True
+            )
+                
+        except Exception as e:
+            logging.error(f"Events WebSocket proxy error: {e}")
+        finally:
+            # Clean up connections
+            if upstream:
+                try:
+                    await upstream.close()
+                except Exception:
+                    pass
+            
+            # Only close websocket if not already closed
+            try:
+                if websocket.client_state.name != "DISCONNECTED":
+                    await websocket.close()
+            except Exception:
+                pass
+    
+    @app.websocket("/jupyter/api/kernels/{kernel_id}/channels")
+    async def jupyter_kernel_websocket(websocket: WebSocket, kernel_id: str):
+        """Proxy WebSocket for Jupyter kernel channels - this is crucial for cell execution"""
+        logging.info(f"🔌 WEBSOCKET HANDLER CALLED: kernel_id={kernel_id}")
+        logging.info(f"🔌 WEBSOCKET QUERY PARAMS: {dict(websocket.query_params)}")
+        
+        if not notebook_manager.is_running():
+            logging.error("🔌 WEBSOCKET REJECTED: Jupyter server not running")
+            await websocket.close(code=1011, reason="Jupyter server not running")
+            return
+        
+        # Kernel protection: Check if this kernel is blocked
+        if kernel_protection.should_block_kernel(kernel_id):
+            logging.info(f"BLOCKED WEBSOCKET: Kernel {kernel_id} is temporarily blocked")
+            await websocket.close(code=1011, reason=f"Kernel {kernel_id} temporarily unavailable")
+            return
+            
+        # Allow rapid reconnects for kernel WebSocket channels; do not dedupe here
+            
+        # Get query parameters (especially session_id) and ensure token is always included
+        query_params = dict(websocket.query_params)
+        # Always add/override token to ensure authentication
+        query_params["token"] = notebook_manager.token
+        query_string = "&".join([f"{k}={v}" for k, v in query_params.items()])
+        
+        target_url = f"ws://localhost:{notebook_manager.port}/jupyter/api/kernels/{kernel_id}/channels"
+        if query_string:
+            target_url += f"?{query_string}"
+        
+        logging.info(f"WEBSOCKET CONNECTING: {target_url}")
+        logging.info(f"WEBSOCKET QUERY PARAMS: {query_params}")
+        
+        upstream = None
+        try:
+            import websockets
+            import asyncio
+            
+            await websocket.accept()
+            
+            # Connect to upstream Jupyter server - token already in URL
+            logging.info(f"WEBSOCKET FINAL URL: {target_url}")
+            upstream = await websockets.connect(target_url, max_size=None)
+            
+            # Track connection state
+            client_closed = asyncio.Event()
+            upstream_closed = asyncio.Event()
+            
+            async def forward_to_upstream():
+                try:
+                    while not client_closed.is_set() and not upstream_closed.is_set():
+                        data = await websocket.receive()
+                        msg_type = data.get('type')
+                        if msg_type == 'websocket.disconnect':
+                            client_closed.set()
+                            break
+                        # Prefer explicit branches for text vs bytes
+                        if 'text' in data and data['text'] is not None:
+                            if not upstream_closed.is_set():
+                                await upstream.send(data['text'])
+                        elif 'bytes' in data and data['bytes'] is not None:
+                            if not upstream_closed.is_set():
+                                await upstream.send(data['bytes'])
+                except WebSocketDisconnect:
+                    client_closed.set()
+                except websockets.exceptions.ConnectionClosed:
+                    upstream_closed.set()
+                except Exception as e:
+                    logging.error(f"Forward to upstream error: {e}")
+                    client_closed.set()
+                    upstream_closed.set()
+            
+            async def forward_to_client():
+                try:
+                    async for message in upstream:
+                        if client_closed.is_set():
+                            break
+                        try:
+                            if isinstance(message, (bytes, bytearray)):
+                                await websocket.send_bytes(message)
+                            else:
+                                await websocket.send_text(message)
+                        except Exception:
+                            client_closed.set()
+                            break
+                except websockets.exceptions.ConnectionClosed:
+                    upstream_closed.set()
+                except Exception as e:
+                    logging.error(f"Forward to client error: {e}")
+                    upstream_closed.set()
+            
+            # Run both forwarding tasks with proper cleanup
+            await asyncio.gather(
+                forward_to_upstream(), 
+                forward_to_client(),
+                return_exceptions=True
+            )
+                
+        except Exception as e:
+            # Enhanced error logging for WebSocket connection issues
+            logging.error(f"WEBSOCKET CONNECTION ERROR: {type(e).__name__}: {e}")
+            logging.error(f"WEBSOCKET FAILED URL: {target_url}")
+            
+            # Record kernel failure if it's a connection error (likely 404 or 403)
+            if any(code in str(e) for code in ["404", "403", "rejected", "forbidden"]):
+                kernel_protection.record_kernel_failure(kernel_id)
+                logging.warning(f"WEBSOCKET AUTH/404: Recorded failure for kernel {kernel_id}")
+            
+            logging.error(f"Kernel WebSocket proxy error: {e}")
+        finally:
+            # Clean up connections
+            if upstream:
+                try:
+                    await upstream.close()
+                except Exception:
+                    pass
+            
+            # Only close websocket if not already closed
+            try:
+                if websocket.client_state.name != "DISCONNECTED":
+                    await websocket.close()
+            except Exception:
+                pass
+
+    # TEMPORARILY DISABLE HTTP PROXY to test WebSocket routing
+    # @app.api_route("/jupyter/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    # async def jupyter_proxy(request: Request, path: str):
+    
+    # Jupyter proxy routes - HTTP routes defined after WebSocket routes to avoid conflicts
+    # Each route needs its own function in FastAPI
+    
+    @app.api_route("/jupyter/api/contents/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def jupyter_contents_proxy(request: Request, path: str):
+        return await jupyter_specific_proxy_impl(request, f"api/contents/{path}")
+    
+    @app.api_route("/jupyter/api/sessions/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def jupyter_sessions_proxy(request: Request, path: str):
+        return await jupyter_specific_proxy_impl(request, f"api/sessions/{path}")
+    
+    # Kernel HTTP routes - MUST be more specific to avoid WebSocket conflicts
+    @app.api_route("/jupyter/api/kernels", methods=["GET", "POST"])
+    async def jupyter_kernels_list_proxy(request: Request):
+        return await jupyter_specific_proxy_impl(request, "api/kernels")
+    
+    @app.api_route("/jupyter/api/kernels/{kernel_id}", methods=["GET", "DELETE", "PATCH"])
+    async def jupyter_kernel_proxy(request: Request, kernel_id: str):
+        return await jupyter_specific_proxy_impl(request, f"api/kernels/{kernel_id}")
+    
+    @app.api_route("/jupyter/api/kernels/{kernel_id}/interrupt", methods=["POST"])
+    async def jupyter_kernel_interrupt_proxy(request: Request, kernel_id: str):
+        return await jupyter_specific_proxy_impl(request, f"api/kernels/{kernel_id}/interrupt")
+    
+    @app.api_route("/jupyter/api/kernels/{kernel_id}/restart", methods=["POST"])
+    async def jupyter_kernel_restart_proxy(request: Request, kernel_id: str):
+        return await jupyter_specific_proxy_impl(request, f"api/kernels/{kernel_id}/restart")
+    
+    @app.api_route("/jupyter/api/settings/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def jupyter_settings_proxy(request: Request, path: str):
+        return await jupyter_specific_proxy_impl(request, f"api/settings/{path}")
+    
+    @app.api_route("/jupyter/api/translations/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def jupyter_translations_proxy(request: Request, path: str):
+        return await jupyter_specific_proxy_impl(request, f"api/translations/{path}")
+    
+    @app.api_route("/jupyter/api/nbconvert/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def jupyter_nbconvert_proxy(request: Request, path: str):
+        return await jupyter_specific_proxy_impl(request, f"api/nbconvert/{path}")
+    
+    @app.api_route("/jupyter/lsp/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def jupyter_lsp_proxy(request: Request, path: str):
+        return await jupyter_specific_proxy_impl(request, f"lsp/{path}")
+    
+    @app.api_route("/jupyter/lab/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def jupyter_lab_proxy(request: Request, path: str):
+        return await jupyter_specific_proxy_impl(request, f"lab/{path}")
+    
+    @app.api_route("/jupyter/notebooks/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def jupyter_notebooks_proxy(request: Request, path: str):
+        return await jupyter_specific_proxy_impl(request, f"notebooks/{path}")
+    
+    @app.api_route("/jupyter/custom/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def jupyter_custom_proxy(request: Request, path: str):
+        return await jupyter_specific_proxy_impl(request, f"custom/{path}")
+    
+    # Catch-all for remaining Jupyter requests not handled by specific routes above
     @app.api_route("/jupyter/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def jupyter_proxy(request: Request, path: str):
-        """Proxy all /jupyter/* requests to the Jupyter Notebook server"""
+    async def jupyter_catchall_proxy(request: Request, path: str):
+        return await jupyter_specific_proxy_impl(request, path)
+    
+    async def jupyter_specific_proxy_impl(request: Request, path: str):
+        """Proxy specific /jupyter/* requests to the Jupyter Notebook server (WebSocket-safe)"""
+        
+        # WebSocket upgrade requests should be handled by WebSocket routes defined before this
+        if (request.method == "GET" and 
+            request.headers.get("upgrade", "").lower() == "websocket"):
+            logging.warning(f"🔄 WEBSOCKET UPGRADE REQUEST INTERCEPTED: {path} - This should not happen!")
+            logging.warning(f"🔄 Headers: {dict(request.headers)}")
+            # If we get here, it means our WebSocket routes aren't working
+        
         if not notebook_manager.is_running():
             raise HTTPException(status_code=503, detail="Jupyter server not running")
         
@@ -927,7 +1341,7 @@ def create_app():
             query_string = "&".join([f"{k}={v}" for k, v in query_params.items()])
             target_url += f"?{query_string}"
         
-        # Kernel protection: Check for blocked kernels and duplicate requests
+        # Kernel protection: Check for blocked kernels; avoid dedupe on GETs
         if "api/kernels" in path:
             # Extract kernel ID from path if present
             kernel_id = None
@@ -936,13 +1350,12 @@ def create_app():
                 if len(path_parts) >= 4:
                     kernel_id = path_parts[3]
             
-            # Create request key for deduplication
-            request_key = f"{request.method}:{path}:{kernel_id}"
-            
-            # Check for duplicate requests (rapid retries)
-            if kernel_protection.is_duplicate_request(request_key, window_seconds=0.5):
-                logging.info(f"BLOCKED DUPLICATE: {request_key}")
-                raise HTTPException(status_code=429, detail="Too many requests - duplicate detected")
+            # Only dedupe non-idempotent methods; allow GET status polling
+            if request.method not in ["GET", "HEAD", "OPTIONS"]:
+                request_key = f"{request.method}:{path}:{kernel_id}"
+                if kernel_protection.is_duplicate_request(request_key, window_seconds=0.5):
+                    logging.info(f"BLOCKED DUPLICATE: {request_key}")
+                    raise HTTPException(status_code=429, detail="Too many requests - duplicate detected")
             
             # Check if kernel should be blocked
             if kernel_id and kernel_protection.should_block_kernel(kernel_id):
@@ -972,19 +1385,26 @@ def create_app():
                     follow_redirects=False
                 )
                 
-                # Kernel protection: Handle failures
-                if "api/kernels" in path and response.status_code == 404:
-                    # Extract kernel ID and record failure
-                    path_parts = path.split('/')
-                    if len(path_parts) >= 4 and path_parts[1] == "api" and path_parts[2] == "kernels":
-                        kernel_id = path_parts[3]
-                        kernel_protection.record_kernel_failure(kernel_id)
-                        logging.warning(f"KERNEL 404: Recorded failure for kernel {kernel_id}")
+                # Kernel protection: Handle failures (treat stale kernel 404s as noise)
+                if "api/kernels" in path:
+                    if response.status_code == 404:
+                        # Stale kernel IDs are common after reload; log quietly and do not record
+                        path_parts = path.split('/')
+                        if len(path_parts) >= 4 and path_parts[1] == "api" and path_parts[2] == "kernels":
+                            kernel_id = path_parts[3]
+                            logging.info(f"KERNEL 404 (stale): {kernel_id}")
+                    elif response.status_code in (401, 403) or 500 <= response.status_code < 600:
+                        # Only record auth or server errors
+                        path_parts = path.split('/')
+                        if len(path_parts) >= 4 and path_parts[1] == "api" and path_parts[2] == "kernels":
+                            kernel_id = path_parts[3]
+                            kernel_protection.record_kernel_failure(kernel_id)
+                            logging.warning(f"KERNEL ERROR {response.status_code}: Recorded failure for kernel {kernel_id}")
                 
                 # Debug logging for kernel API responses
                 if "api/kernels" in path:
                     logging.info(f"KERNEL API RESPONSE: {response.status_code} for {request.method} {path}")
-                    if response.status_code >= 400:
+                    if response.status_code >= 400 and response.status_code != 404:
                         try:
                             response_text = await response.aread()
                             logging.error(f"KERNEL API ERROR RESPONSE: {response_text}")
@@ -1099,13 +1519,15 @@ def create_app():
     
     @app.post("/api/directives/approve")
     async def approve_directive(directive: DirectiveRequest):
-        """Apply an approved tool directive to the notebook"""
+        """Apply an approved tool directive to the notebook and add state update to conversation"""
         try:
             if not notebook_manager.is_running():
                 raise HTTPException(status_code=503, detail="Jupyter server not running")
             
             # Parse the tool directive and execute the corresponding notebook operation
             result_message = ""
+            cell_data = None
+            operation_type = ""
             
             if directive.tool == "insert_cell":
                 # Insert a new cell at the specified position
@@ -1113,6 +1535,35 @@ def create_app():
                     directive,
                     notebook_manager
                 )
+                operation_type = "inserted"
+                
+                # Get the inserted cell data for conversation update
+                notebook_path = extract_notebook_path_from_session(directive.session_id)
+                logging.info(f"POST-MOD DEBUG - Result message: {result_message}")
+                if notebook_path and "position" in result_message:
+                    try:
+                        notebook_content = await get_notebook_content(notebook_path, notebook_manager)
+                        if notebook_content:
+                            # Find the cell that was just inserted
+                            cells = notebook_content.get('cells', [])
+                            logging.info(f"POST-MOD DEBUG - Found {len(cells)} cells after insert")
+                            if cells:
+                                # Get position from result message
+                                import re
+                                pos_match = re.search(r'position (\d+)', result_message)
+                                logging.info(f"POST-MOD DEBUG - Position regex match: {pos_match}")
+                                if pos_match:
+                                    position = int(pos_match.group(1))
+                                    logging.info(f"POST-MOD DEBUG - Extracted position: {position}")
+                                    if position < len(cells):
+                                        cell_data = cells[position]
+                                        logging.info(f"POST-MOD DEBUG - Found cell data: {cell_data.get('id', 'no-id')}")
+                                    else:
+                                        logging.warning(f"POST-MOD DEBUG - Position {position} >= cell count {len(cells)}")
+                                else:
+                                    logging.warning(f"POST-MOD DEBUG - No position found in message: {result_message}")
+                    except Exception as e:
+                        logging.error(f"Error getting inserted cell data: {e}")
                 
             elif directive.tool == "edit_cell":
                 # Edit an existing cell
@@ -1122,6 +1573,23 @@ def create_app():
                     notebook_manager,
                     directive.session_id
                 )
+                operation_type = "updated"
+                
+                # Get the updated cell data for conversation update
+                notebook_path = extract_notebook_path_from_session(directive.session_id)
+                if notebook_path and directive.cell_id:
+                    try:
+                        notebook_content = await get_notebook_content(notebook_path, notebook_manager)
+                        if notebook_content:
+                            # Find the updated cell by ID
+                            for cell in notebook_content.get('cells', []):
+                                # Check both ID locations for compatibility
+                                if (cell.get('id') == directive.cell_id or 
+                                    cell.get('metadata', {}).get('id') == directive.cell_id):
+                                    cell_data = cell
+                                    break
+                    except Exception as e:
+                        logging.error(f"Error getting updated cell data: {e}")
                 
             elif directive.tool == "delete_cell":
                 # Delete a cell
@@ -1130,9 +1598,51 @@ def create_app():
                     notebook_manager,
                     directive.session_id
                 )
+                operation_type = "deleted"
+                # For deletes, we don't need cell_data, just the ID
                 
             else:
                 raise HTTPException(status_code=400, detail=f"Unknown tool: {directive.tool}")
+            
+            # Add post-modification message to conversation history
+            try:
+                from src.conversation_manager import get_conversation_manager
+                from src.conversation_logger import ConversationLogger
+                
+                conv_manager = get_conversation_manager()
+                
+                # Create the appropriate update message
+                if operation_type == "deleted":
+                    update_message_content = conv_manager.format_cell_deletion(directive.cell_id)
+                elif cell_data:
+                    update_message_content = conv_manager.format_cell_update(cell_data, operation_type)
+                else:
+                    # Fallback if we couldn't get cell data
+                    update_message_content = conv_manager.format_operation_failure(
+                        directive.tool, 
+                        "Success but cell data unavailable for conversation", 
+                        directive.cell_id
+                    )
+                
+                # Add the update message to conversation history
+                if directive.session_id:
+                    session_data = load_session_data(directive.session_id)
+                    update_message = {
+                        'role': 'user',
+                        'content': update_message_content,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    session_data['messages'].append(update_message)
+                    
+                    # Save updated conversation
+                    logger = ConversationLogger()
+                    logger.save_conversation_state(session_data['log_file'], session_data['messages'])
+                    
+                    logging.info(f"Added {operation_type} cell message to conversation: {directive.session_id}")
+                
+            except Exception as e:
+                logging.error(f"Error adding post-modification message to conversation: {e}")
+                # Don't fail the whole operation if conversation update fails
             
             return JSONResponse({
                 "success": True,
@@ -1145,197 +1655,7 @@ def create_app():
         except Exception as e:
             logging.error(f"Error applying directive: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
-    # WebSocket proxy endpoints - forward to actual Jupyter server
-    @app.websocket("/jupyter/api/events/subscribe")
-    async def jupyter_events_websocket(websocket: WebSocket):
-        """Proxy WebSocket for Jupyter event subscriptions"""
-        if not notebook_manager.is_running():
-            await websocket.close(code=1011, reason="Jupyter server not running")
-            return
-            
-        target_url = f"ws://localhost:{notebook_manager.port}/jupyter/api/events/subscribe"
-        
-        upstream = None
-        try:
-            import websockets
-            import asyncio
-            
-            await websocket.accept()
-            
-            # Connect to upstream Jupyter server
-            upstream = await websockets.connect(f"{target_url}?token={notebook_manager.token}")
-            
-            # Track connection state
-            client_closed = asyncio.Event()
-            upstream_closed = asyncio.Event()
-            
-            async def forward_to_upstream():
-                try:
-                    while not client_closed.is_set() and not upstream_closed.is_set():
-                        message = await websocket.receive_text()
-                        if not upstream_closed.is_set():
-                            await upstream.send(message)
-                except WebSocketDisconnect:
-                    client_closed.set()
-                except websockets.exceptions.ConnectionClosed:
-                    upstream_closed.set()
-                except Exception as e:
-                    logging.error(f"Events forward to upstream error: {e}")
-                    client_closed.set()
-                    upstream_closed.set()
-            
-            async def forward_to_client():
-                try:
-                    async for message in upstream:
-                        if not client_closed.is_set():
-                            try:
-                                await websocket.send_text(message)
-                            except Exception:
-                                # Client disconnected while sending
-                                client_closed.set()
-                                break
-                except websockets.exceptions.ConnectionClosed:
-                    upstream_closed.set()
-                except Exception as e:
-                    logging.error(f"Events forward to client error: {e}")
-                    upstream_closed.set()
-            
-            # Run both forwarding tasks with proper cleanup
-            await asyncio.gather(
-                forward_to_upstream(), 
-                forward_to_client(),
-                return_exceptions=True
-            )
-                
-        except Exception as e:
-            logging.error(f"Events WebSocket proxy error: {e}")
-        finally:
-            # Clean up connections
-            if upstream:
-                try:
-                    await upstream.close()
-                except Exception:
-                    pass
-            
-            # Only close websocket if not already closed
-            try:
-                if websocket.client_state.name != "DISCONNECTED":
-                    await websocket.close()
-            except Exception:
-                pass
-    
-    @app.websocket("/jupyter/api/kernels/{kernel_id}/channels")
-    async def jupyter_kernel_websocket(websocket: WebSocket, kernel_id: str):
-        """Proxy WebSocket for Jupyter kernel channels - this is crucial for cell execution"""
-        if not notebook_manager.is_running():
-            await websocket.close(code=1011, reason="Jupyter server not running")
-            return
-        
-        # Kernel protection: Check if this kernel is blocked
-        if kernel_protection.should_block_kernel(kernel_id):
-            logging.info(f"BLOCKED WEBSOCKET: Kernel {kernel_id} is temporarily blocked")
-            await websocket.close(code=1011, reason=f"Kernel {kernel_id} temporarily unavailable")
-            return
-            
-        # Check for duplicate WebSocket requests (same kernel, rapid succession)
-        ws_request_key = f"WS:{kernel_id}"
-        if kernel_protection.is_duplicate_request(ws_request_key, window_seconds=2.0):
-            logging.info(f"BLOCKED DUPLICATE WEBSOCKET: {kernel_id}")
-            await websocket.close(code=1011, reason="Duplicate WebSocket connection blocked")
-            return
-            
-        # Get query parameters (especially session_id)
-        query_params = dict(websocket.query_params)
-        query_string = "&".join([f"{k}={v}" for k, v in query_params.items()])
-        if "token" not in query_params:
-            query_string += f"&token={notebook_manager.token}"
-        
-        target_url = f"ws://localhost:{notebook_manager.port}/jupyter/api/kernels/{kernel_id}/channels"
-        if query_string:
-            target_url += f"?{query_string}"
-        
-        logging.info(f"WEBSOCKET CONNECTING: {target_url}")
-        logging.info(f"WEBSOCKET QUERY PARAMS: {query_params}")
-        
-        upstream = None
-        try:
-            import websockets
-            import asyncio
-            
-            await websocket.accept()
-            
-            # Connect to upstream Jupyter server - token already in URL
-            logging.info(f"WEBSOCKET FINAL URL: {target_url}")
-            upstream = await websockets.connect(target_url)
-            
-            # Track connection state
-            client_closed = asyncio.Event()
-            upstream_closed = asyncio.Event()
-            
-            async def forward_to_upstream():
-                try:
-                    while not client_closed.is_set() and not upstream_closed.is_set():
-                        message = await websocket.receive_text()
-                        if not upstream_closed.is_set():
-                            await upstream.send(message)
-                except WebSocketDisconnect:
-                    client_closed.set()
-                except websockets.exceptions.ConnectionClosed:
-                    upstream_closed.set()
-                except Exception as e:
-                    logging.error(f"Forward to upstream error: {e}")
-                    client_closed.set()
-                    upstream_closed.set()
-            
-            async def forward_to_client():
-                try:
-                    async for message in upstream:
-                        if not client_closed.is_set():
-                            try:
-                                await websocket.send_text(message)
-                            except Exception:
-                                # Client disconnected while sending
-                                client_closed.set()
-                                break
-                except websockets.exceptions.ConnectionClosed:
-                    upstream_closed.set()
-                except Exception as e:
-                    logging.error(f"Forward to client error: {e}")
-                    upstream_closed.set()
-            
-            # Run both forwarding tasks with proper cleanup
-            await asyncio.gather(
-                forward_to_upstream(), 
-                forward_to_client(),
-                return_exceptions=True
-            )
-                
-        except Exception as e:
-            # Enhanced error logging for WebSocket connection issues
-            logging.error(f"WEBSOCKET CONNECTION ERROR: {type(e).__name__}: {e}")
-            logging.error(f"WEBSOCKET FAILED URL: {target_url}")
-            
-            # Record kernel failure if it's a connection error (likely 404 or 403)
-            if any(code in str(e) for code in ["404", "403", "rejected", "forbidden"]):
-                kernel_protection.record_kernel_failure(kernel_id)
-                logging.warning(f"WEBSOCKET AUTH/404: Recorded failure for kernel {kernel_id}")
-            
-            logging.error(f"Kernel WebSocket proxy error: {e}")
-        finally:
-            # Clean up connections
-            if upstream:
-                try:
-                    await upstream.close()
-                except Exception:
-                    pass
-            
-            # Only close websocket if not already closed
-            try:
-                if websocket.client_state.name != "DISCONNECTED":
-                    await websocket.close()
-            except Exception:
-                pass
+
     
     # App lifecycle events
     @app.on_event("startup")

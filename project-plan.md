@@ -3,6 +3,13 @@
 ## Overview
 AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML chat interface.
 
+## Current State Snapshot (Aug 2025)
+- Jupyter Notebook 7 is embedded via an iframe; the assistant proxies `/jupyter/*` as a minimal pass-through.
+- Kernel WebSocket proxy is a dumb tunnel: forwards text and binary frames, allows rapid reconnects, and does not throttle kernel GET polling.
+- After applying a directive, the notebook iframe auto-reloads so changes appear immediately.
+- JSON-first linear conversation is in place: initial User message carries full notebook JSON; post-approval messages include precise cell JSON updates/deletions. System prompt documents delete semantics.
+- Outstanding: token counting and conversation summarization. Optional future: point the iframe directly to the Jupyter server URL (no proxy) given intranet/VPN deployment and no CORS concerns.
+
 ## Phase 1: Proof of Concept
 *Goal: Get basic functionality working to start learning and iterating*
 
@@ -102,7 +109,7 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML
   - [x] Auto-discover free port (start with 8889)
   - [x] Implement FastAPI reverse proxy for `/jupyter/*` routes
   - [x] Manage server lifecycle (start/stop with nbscribe)
-  - [x] Fix WebSocket proxying for kernel communication
+  - [x] Kernel WebSocket proxy simplified to pass-through (text/bytes, no dedupe; allow kernel GET polling)
   - [x] Clean console logging (filter repetitive noise)
 - [x] **Split-Pane UI**  
   - [x] Update HTML templates for two-column layout
@@ -157,21 +164,21 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML
     - [x] Invalid notebook format → validation and recovery
     - [x] Permission errors → clear user feedback
 
-- [ ] **Linear Conversation Architecture** ⭐ **NEW CURRENT FOCUS**
+- [ ] **Linear Conversation Architecture** ⭐ **CURRENT FOCUS**
   - [ ] **Conversation Flow Design**
-    - [ ] Replace system message injection with linear conversation history
-    - [ ] First User message contains complete notebook source at conversation start
-    - [ ] Assistant sees notebook before offering help (natural flow)
-    - [ ] Subsequent conversation maintains linear message history
-    - [ ] Post-modification User messages report cell changes to AI
+    - [x] Replace system message injection with linear conversation history
+    - [x] First User message contains complete notebook source at conversation start
+    - [x] Assistant sees notebook before offering help (natural flow)
+    - [x] Subsequent conversation maintains linear message history
+    - [x] Post-modification User messages report cell changes to AI
   - [ ] **Message Type Architecture**
     - [ ] System: Prompt instructions + conversation summary (on restart)
-    - [ ] User: Initial notebook source, human requests, cell state updates
-    - [ ] Assistant: Help offers, code proposals with TOOL directives
+    - [x] User: Initial notebook source, human requests, cell state updates
+    - [x] Assistant: Help offers, code proposals with TOOL directives
   - [ ] **Cell State Tracking**
-    - [ ] Format complete notebook as first User message
-    - [ ] Post-approval: "Cell {id} {operation}: {content}" as User messages
-    - [ ] Include successful operations, failures, and deletions
+    - [x] Format complete notebook as first User message
+    - [x] Post-approval: "Cell {id} {operation}: {content}" as User messages
+    - [x] Include successful operations, failures, and deletions
     - [ ] Wrap state updates in identifiers for UI compacting/expanding
   - [ ] **Conversation Management**
     - [ ] Token count-based conversation restart triggers
@@ -378,28 +385,18 @@ def format_cell_deletion(cell_id: str) -> str:
 6. ✅ AI leverages native .ipynb JSON comprehension for better understanding
 
 ### **Jupyter Configuration Philosophy**
-**Goal**: Minimal, predictable Jupyter with no hidden state - both human and AI see complete record
+**Goal**: Minimal, predictable Jupyter; assistant only tunnels traffic necessary for kernels to function.
 
-**Tested Configuration Results:**
-✅ **SAFE & BENEFICIAL:**
-- `--NotebookApp.terminals_enabled=False` → Eliminates `/api/terminals` system polling + WebSocket 403s
+**Effective settings:**
+- ✅ `--ServerApp.base_url=/jupyter` and fixed token
+- ✅ `--NotebookApp.terminals_enabled=False`
 
-❌ **AVOID - BREAKS FUNCTIONALITY:**
-- `--NotebookApp.max_kernels=1` → Prevents Jupyter server startup entirely
-- `--NotebookApp.shutdown_no_activity_timeout=600` → Triggers heavy system-wide polling (kernels, sessions, contents)
-- `--KernelManager.autorestart=True` → Adds unnecessary checkpoint polling
+**Do not interfere with kernel operation:**
+- Allow kernel channel WebSockets to reconnect freely (no dedupe throttling on WS).
+- Allow kernel status GET polling (no throttling on GETs).
+- Forward both text and binary WS frames.
 
-**Eliminated Noisy Polling:**
-- ❌ ~~`GET /jupyter/api/terminals?...`~~ (Constant terminal status checks)
-- ❌ ~~`GET /jupyter/api/kernels?...`~~ (System-wide kernel polling) 
-- ❌ ~~`GET /jupyter/api/sessions?...`~~ (Session monitoring)
-- ❌ ~~`GET /jupyter/api/contents?...`~~ (File system watching)
-- ❌ ~~`WebSocket /jupyter/api/events/subscribe → 403`~~ (Terminal event subscription)
-
-**Remaining Acceptable Activity:**
-- ✅ `GET /jupyter/api/contents/{notebook}.ipynb/checkpoints?...` (Targeted checkpoint monitoring)
-
-**Philosophy**: "Everything in the open, no hidden state" - AI and human see identical context. Systematic testing eliminated 95% of log noise while preserving all essential Jupyter functionality.
+**Optional future:** Direct iframe to Jupyter URL (no proxy) given intranet/VPN deployment.
 
 ---
 
@@ -470,9 +467,10 @@ USER: [Next human request]
   - [ ] Better notebook integration visual design
   - [ ] Conversation message compacting/expanding
   - [ ] Performance optimizations for large conversations
-- [ ] **Jupyter Integration Improvements**
-  - [ ] Enhanced WebSocket kernel communication (currently 403 issues)
-  - [ ] Real-time notebook synchronization
+-- [ ] **Jupyter Integration Improvements**
+  - [x] Kernel WebSocket pass-through stabilized
+  - [x] Immediate cell visibility via iframe reload
+  - [ ] Optional: direct iframe to Jupyter (no proxy) for even simpler architecture
   - [ ] Multi-notebook session support
 - [ ] **Advanced Error Handling & Validation**
   - [ ] Conversation integrity validation
@@ -502,11 +500,11 @@ open http://localhost:5317
 3. ✅ Can send a message and get a response
 4. ✅ Can create/modify a simple notebook (basic implementation complete)
 5. ✅ Conversation history persists
-6. [ ] AI sees complete notebook source before offering help
-7. [ ] AI can reference specific cells from conversation history
-8. [ ] Cell modifications generate automatic state update User messages
+6. ✅ AI sees complete notebook source before offering help
+7. ✅ AI can reference specific cells from conversation history
+8. ✅ Cell modifications generate automatic state update User messages
 9. [ ] Token counting triggers conversation restart appropriately
-10. [ ] Delete operations are clearly communicated to AI with significance
+10. ✅ Delete operations are clearly communicated to AI with significance
 
 ---
 

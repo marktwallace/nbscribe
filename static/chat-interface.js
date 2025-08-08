@@ -5,6 +5,8 @@
 
 class ChatInterface {
     constructor() {
+        console.log('💬 CHAT INTERFACE: Starting constructor');
+        
         this.chatForm = document.getElementById('chat-form');
         this.chatInput = document.getElementById('chat-input');
         this.chatSubmit = document.getElementById('chat-submit');
@@ -15,12 +17,15 @@ class ChatInterface {
         
         // Extract session ID from page metadata
         this.sessionId = document.querySelector('meta[name="conversation-id"]').getAttribute('content');
+        console.log('💬 CHAT INTERFACE: Session ID:', this.sessionId);
         
         this.initMarkdown();
         this.initEventListeners();
         this.loadSystemPrompt(); // Load system prompt for transparency
         this.renderExistingMarkdown(); // Render any existing messages
         this.scrollToBottom(); // Scroll to bottom on page load
+        
+        console.log('💬 CHAT INTERFACE: Constructor complete');
     }
     
     async loadSystemPrompt() {
@@ -42,12 +47,16 @@ class ChatInterface {
     
     initMarkdown() {
         // Use shared markdown configuration
+        console.log('💬 LIVE CHAT: Initializing markdown renderer');
         initMarkdownRenderer();
+        console.log('💬 LIVE CHAT: Markdown renderer initialized');
     }
     
     renderExistingMarkdown() {
         // Use shared markdown rendering function
+        console.log('💬 LIVE CHAT: Rendering existing markdown');
         renderAllMarkdown();
+        console.log('💬 LIVE CHAT: Existing markdown rendered');
     }
     
     renderMessageMarkdown(messageElement) {
@@ -271,5 +280,6 @@ class ChatInterface {
 
 // Initialize chat interface when page loads
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('💬 DOM CONTENT LOADED: Creating ChatInterface');
     new ChatInterface();
 }); 
