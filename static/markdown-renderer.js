@@ -60,47 +60,99 @@ function renderMarkdownInElement(messageElement) {
 }
 
 function processToolDirectives(markdownText, { groupId } = {}) {
-    // Pattern to match code block followed by tool directive
-    const pattern = /```(\w+)?\n([\s\S]*?)\n```\s*\n\s*```\s*\n([\s\S]*?)\n```/g;
-    
-    console.log('🔧 PROCESSING TOOL DIRECTIVES');
-    console.log('🔧 Input text:', markdownText);
-    console.log('🔧 Pattern:', pattern);
-    
-    let matchCount = 0;
+    console.log('🔧 PROCESSING TOOL DIRECTIVES (tokenizer mode)');
     let seq = 0;
-    const result = markdownText.replace(pattern, function(match, language, code, metadata) {
-        matchCount++;
-        console.log(`🔧 MATCH ${matchCount}:`, { language, code: code?.substring(0, 100), metadata });
-        
-        language = language || 'python';
-        code = code.trim();
-        metadata = metadata.trim();
-        
-        // Parse the metadata
-        const directive = parseDirectiveMetadata(metadata, code, language);
-        console.log('🔧 PARSED DIRECTIVE:', directive);
-        
-        if (directive && validateDirective(directive)) {
-            // Attach ordering info for this assistant message group
-            directive.group_id = groupId || 'group_default';
-            directive.seq = seq++;
-            console.log('🔧 DIRECTIVE VALID - Creating HTML');
-            return createDirectiveHTML(directive, code, language);
-        } else {
-            // Malformed directive - show error
-            console.error('🔧 Invalid tool directive:', metadata);
-            return createErrorHTML(code, language, `❌ MALFORMED TOOL DIRECTIVE: ${metadata}`);
+
+    // Tokenize into text and fenced code blocks
+    const fenceRe = /```([\w-]*)\s*\r?\n([\s\S]*?)```/g;
+    const blocks = [];
+    let lastIndex = 0;
+    let m;
+    while ((m = fenceRe.exec(markdownText)) !== null) {
+        const [all, langRaw, body] = m;
+        const start = m.index;
+        const end = start + all.length;
+        if (start > lastIndex) {
+            blocks.push({ type: 'text', content: markdownText.slice(lastIndex, start) });
         }
-    });
-    
-    console.log(`🔧 Found ${matchCount} matches`);
-    console.log('🔧 Result:', result);
+        blocks.push({ type: 'code', lang: (langRaw || '').trim(), content: (body || '').trim(), raw: all });
+        lastIndex = end;
+    }
+    if (lastIndex < markdownText.length) {
+        blocks.push({ type: 'text', content: markdownText.slice(lastIndex) });
+    }
+
+    // Walk blocks: look for code fence followed by metadata fence with only TOOL info, allowing only whitespace between
+    const out = [];
+    for (let i = 0; i < blocks.length; i++) {
+        const b = blocks[i];
+        if (b.type !== 'code') { out.push(b.content); continue; }
+
+        // Peek ahead to next code fence, ensure only whitespace in-between
+        let j = i + 1;
+        let between = '';
+        while (j < blocks.length && blocks[j].type === 'text' && /^\s*$/.test(blocks[j].content)) {
+            between += blocks[j].content;
+            j++;
+        }
+        if (j < blocks.length && blocks[j].type === 'code') {
+            const metaBlock = blocks[j];
+            const metaText = metaBlock.content.trim();
+            const isToolMeta = /^TOOL\s*:/i.test(metaText) || metaText.startsWith('{');
+            if (isToolMeta) {
+                const directive = parseDirectiveMetadata(metaText, b.content, (b.lang || 'python'), metaBlock.lang || '');
+                if (directive && validateDirective(directive)) {
+                    directive.group_id = groupId || 'group_default';
+                    directive.seq = seq++;
+                    out.push(createDirectiveHTML(directive, b.content, b.lang || 'python'));
+                    i = j; // skip the meta block
+                    continue;
+                } else {
+                    out.push(createErrorHTML(b.content, b.lang || 'python', `❌ MALFORMED TOOL DIRECTIVE: ${metaText}`));
+                    i = j;
+                    continue;
+                }
+            }
+        }
+
+        // Not a directive pair; keep original code block
+        out.push(b.raw);
+    }
+
+    const result = out.join('');
+    console.log('🔧 TOKENIZER RESULT length:', result.length);
     return result;
 }
 
-function parseDirectiveMetadata(metadata, code, language) {
+function parseDirectiveMetadata(metadata, code, language, metaLang) {
     try {
+        // If metadata looks like JSON, prefer JSON parsing
+        const metaIsJson = (metaLang && typeof metaLang === 'string' && metaLang.toLowerCase() === 'json') || metadata.trim().startsWith('{');
+        if (metaIsJson) {
+            try {
+                const obj = JSON.parse(metadata);
+                const norm = {};
+                Object.keys(obj).forEach(k => { norm[k.toLowerCase()] = obj[k]; });
+                const sessionIdFromMeta = norm.session_id || null;
+                const sessionId = sessionIdFromMeta || (document.querySelector('meta[name="conversation-id"]')?.content || null);
+                return {
+                    tool: norm.tool,
+                    pos: norm.pos ?? null,
+                    cell_id: norm.cell_id ?? null,
+                    before: norm.before ?? null,
+                    after: norm.after ?? null,
+                    code: code,
+                    language: language,
+                    id: norm.id || generateDirectiveId(),
+                    session_id: sessionId,
+                    group_id: norm.group_id || undefined,
+                    seq: norm.seq ?? undefined
+                };
+            } catch (e) {
+                console.warn('Metadata JSON parse failed, falling back to KV parsing:', e);
+            }
+        }
+
         const lines = metadata.split('\n').map(line => line.trim()).filter(line => line);
         
         let tool = null;
@@ -108,25 +160,41 @@ function parseDirectiveMetadata(metadata, code, language) {
         let cell_id = null;
         let before = null;
         let after = null;
+        let id = null;
+        let group_id = null;
+        let seq = null;
+        let sessionIdFromMeta = null;
         
         for (const line of lines) {
-            if (line.startsWith('TOOL:')) {
-                tool = line.split(':', 2)[1].trim();
-            } else if (line.startsWith('POS:')) {
-                pos = parseInt(line.split(':', 2)[1].trim());
-            } else if (line.startsWith('CELL_ID:')) {
-                cell_id = line.split(':', 2)[1].trim();
-            } else if (line.startsWith('BEFORE:')) {
-                before = line.split(':', 2)[1].trim();
-            } else if (line.startsWith('AFTER:')) {
-                after = line.split(':', 2)[1].trim();
+            const u = line.toUpperCase();
+            const val = line.split(':', 2)[1]?.trim();
+            if (u.startsWith('TOOL:')) {
+                tool = val;
+            } else if (u.startsWith('POS:')) {
+                const n = parseInt(val, 10);
+                pos = Number.isFinite(n) ? n : null;
+            } else if (u.startsWith('CELL_ID:')) {
+                cell_id = val;
+            } else if (u.startsWith('BEFORE:')) {
+                before = val;
+            } else if (u.startsWith('AFTER:')) {
+                after = val;
+            } else if (u.startsWith('ID:')) {
+                id = val;
+            } else if (u.startsWith('GROUP_ID:')) {
+                group_id = val;
+            } else if (u.startsWith('SEQ:')) {
+                const n = parseInt(val, 10);
+                seq = Number.isFinite(n) ? n : null;
+            } else if (u.startsWith('SESSION_ID:')) {
+                sessionIdFromMeta = val;
             }
         }
         
         if (!tool) return null;
         
         // Get session ID from meta tag
-        const sessionId = document.querySelector('meta[name="conversation-id"]')?.content || null;
+        const sessionId = sessionIdFromMeta || (document.querySelector('meta[name="conversation-id"]')?.content || null);
         
         return {
             tool: tool,
@@ -136,8 +204,10 @@ function parseDirectiveMetadata(metadata, code, language) {
             after: after,
             code: code,
             language: language,
-            id: generateDirectiveId(),
-            session_id: sessionId
+            id: id || generateDirectiveId(),
+            session_id: sessionId,
+            group_id: group_id || undefined,
+            seq: seq ?? undefined
         };
         
     } catch (error) {
@@ -209,13 +279,13 @@ function createDirectiveHTML(directive, code, language) {
 <div class="tool-directive-container" data-directive-id="${directive.id}">
     <pre><code class="language-${language}">${escapedCode}</code></pre>
     <div class="tool-directive-buttons">
-        <button class="approve-btn" 
-                onclick="approveDirective('${directive.id}')" 
+        <button type="button" class="approve-btn" 
+                onclick="event && event.stopPropagation && event.stopPropagation(); event && event.preventDefault && event.preventDefault(); approveDirective('${directive.id}'); return false;" 
                 data-directive='${directiveJson}'>
             ${approveText}
         </button>
-        <button class="reject-btn" 
-                onclick="rejectDirective('${directive.id}')">
+        <button type="button" class="reject-btn" 
+                onclick="event && event.stopPropagation && event.stopPropagation(); event && event.preventDefault && event.preventDefault(); rejectDirective('${directive.id}'); return false;">
             ❌ Reject
         </button>
     </div>
@@ -265,13 +335,21 @@ function initArchivedLog() {
 // Tool Directive Functions
 async function approveDirective(directiveId) {
     try {
-        const button = document.querySelector(`button[onclick="approveDirective('${directiveId}')"]`);
+        console.log('🟦 APPROVE CLICK:', { directiveId });
+        // Prefer robust lookup via container and its approve button
+        const container = document.querySelector(`[data-directive-id="${directiveId}"]`);
+        const button = container ? container.querySelector('button.approve-btn[data-directive]') : null;
+        if (!button) {
+            throw new Error('Approve button not found for directive');
+        }
         const directiveData = JSON.parse(button.getAttribute('data-directive'));
+        console.log('🟦 APPROVE DATA:', directiveData);
         
         // Disable buttons
         disableDirectiveButtons(directiveId);
         
         // Call backend API to apply the directive
+        console.log('🟦 APPROVE FETCH /api/directives/approve start');
         const response = await fetch('/api/directives/approve', {
             method: 'POST',
             headers: {
@@ -279,104 +357,23 @@ async function approveDirective(directiveId) {
             },
             body: JSON.stringify(directiveData)
         });
+        console.log('🟦 APPROVE FETCH status:', response.status);
         
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         
         const result = await response.json();
+        console.log('🟦 APPROVE RESULT:', result);
         
         if (result.success) {
             // Replace buttons with success status
             replaceDirectiveButtons(directiveId, true, result.message || 'Applied successfully');
 
-            // Try to refresh the embedded Jupyter notebook iframe so changes appear without manual reload
-            try {
-                const iframe = document.getElementById('notebook-iframe');
-                if (iframe) {
-                    // Give the backend a brief moment to finish any async follow-ups
-                    setTimeout(async () => {
-                        const win = iframe.contentWindow;
-                        if (!win) {
-                            console.log('No iframe contentWindow; skipping in-iframe refresh');
-                            return;
-                        }
-
-                        try {
-                            // Preferred: JupyterLab document reload (no navigation)
-                            if (win.jupyterapp?.commands?.execute) {
-                                try {
-                                    await win.jupyterapp.commands.execute('docmanager:reload');
-                                    console.log('🔄 JupyterLab docmanager:reload executed');
-                                    return;
-                                } catch {}
-                                try {
-                                    await win.jupyterapp.commands.execute('docmanager:revert');
-                                    console.log('🔄 JupyterLab docmanager:revert executed');
-                                    return;
-                                } catch {}
-                            }
-
-                            // Classic Notebook fallback: save, clear dirty flag, avoid prompt, then soft reload
-                            if (win.Jupyter?.notebook) {
-                                try {
-                                    // Best-effort save to clear dirty state
-                                    if (typeof win.Jupyter.notebook.save_notebook === 'function') {
-                                        try {
-                                            // Try to await save completion via promise or event; fallback timeout
-                                            await new Promise((resolve) => {
-                                                let resolved = false;
-                                                try {
-                                                    const ev = win.Jupyter.notebook.events;
-                                                    if (ev && typeof ev.one === 'function') {
-                                                        ev.one('notebook_saved.Notebook', () => { resolved = true; resolve(); });
-                                                    }
-                                                } catch {}
-                                                const maybe = win.Jupyter.notebook.save_notebook();
-                                                if (maybe && typeof maybe.then === 'function') {
-                                                    maybe.then(() => { if (!resolved) resolve(); }).catch(() => { if (!resolved) resolve(); });
-                                                }
-                                                // Fallback resolve
-                                                setTimeout(() => { if (!resolved) resolve(); }, 1200);
-                                            });
-                                            console.log('💾 Classic Notebook saved before reload');
-                                        } catch {}
-                                    }
-                                    if (typeof win.Jupyter.notebook.set_dirty === 'function') {
-                                        win.Jupyter.notebook.set_dirty(false);
-                                    }
-                                    win.Jupyter.notebook.dirty = false;
-                                } catch {}
-                                // Temporarily suppress beforeunload prompts by blocking listeners
-                                const stopper = (ev) => {
-                                    try { ev.stopImmediatePropagation?.(); } catch {}
-                                };
-                                try { win.addEventListener('beforeunload', stopper, true); } catch {}
-                                try { win.onbeforeunload = null; } catch {}
-                                try {
-                                    win.location.reload();
-                                    console.log('🔄 Classic Notebook location.reload()');
-                                } catch (e) {
-                                    console.warn('Classic Notebook reload failed', e);
-                                }
-                                // Clean up stopper shortly after
-                                setTimeout(() => { try { win.removeEventListener('beforeunload', stopper, true); } catch {} }, 2000);
-                                return;
-                            }
-
-                            // Last resort: attempt a simple in-frame reload
-                            try { win.onbeforeunload = null; } catch {}
-                            try { win.location.reload(); } catch {}
-                        } catch (e) {
-                            console.warn('In-iframe refresh failed:', e);
-                        }
-                    }, 150);
-                } else {
-                    console.log('No notebook iframe found; skipping iframe refresh');
-                }
-            } catch (e) {
-                console.warn('Notebook iframe refresh skipped due to error:', e);
-            }
+            // In-place classic refresh (no navigation, no Lab dependency)
+            console.log('🟦 APPROVE REFRESH calling refreshNotebookIframeLabSafe()');
+            await refreshNotebookIframeLabSafe();
+            console.log('🟦 APPROVE REFRESH done');
         } else {
             throw new Error(result.error || 'Unknown error occurred');
         }
@@ -386,6 +383,101 @@ async function approveDirective(directiveId) {
         // Re-enable buttons and show error
         enableDirectiveButtons(directiveId);
         alert(`Error applying directive: ${error.message}`);
+    }
+}
+
+// Ensure handlers are available for inline onclick and also via delegated clicks
+// Attach to window for inline attribute lookups
+try { window.approveDirective = approveDirective; } catch {}
+try { window.rejectDirective = rejectDirective; } catch {}
+
+// Event delegation as a safety net in case inline onclick is blocked/sanitized
+(function bindDirectiveDelegates() {
+    if (window.__nbscribeDirectiveDelegateBound) return;
+    window.__nbscribeDirectiveDelegateBound = true;
+    document.addEventListener('click', (ev) => {
+        const approveBtn = ev.target && ev.target.closest && ev.target.closest('button.approve-btn[data-directive]');
+        if (approveBtn) {
+            try {
+                const data = JSON.parse(approveBtn.getAttribute('data-directive'));
+                console.log('🟧 DELEGATE APPROVE CLICK:', data);
+                approveDirective(data.id);
+                ev.preventDefault();
+                ev.stopPropagation();
+            } catch (e) {
+                console.warn('Delegate approve failed:', e);
+            }
+            return;
+        }
+        const rejectBtn = ev.target && ev.target.closest && ev.target.closest('button.reject-btn');
+        if (rejectBtn) {
+            const container = rejectBtn.closest('[data-directive-id]');
+            const id = container ? container.getAttribute('data-directive-id') : null;
+            console.log('🟧 DELEGATE REJECT CLICK:', { id });
+            try { if (id) rejectDirective(id); } catch {}
+            ev.preventDefault();
+            ev.stopPropagation();
+        }
+    }, true);
+})();
+
+// Helper: Wait for JupyterLab app inside the iframe
+async function waitForLabApp(win, timeoutMs = 10000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        try {
+            if (win && win.jupyterapp && win.jupyterapp.commands && typeof win.jupyterapp.commands.execute === 'function') {
+                return true;
+            }
+        } catch {}
+        await new Promise(r => setTimeout(r, 100));
+    }
+    return false;
+}
+
+// Helper: Extract notebook path from iframe URL
+function getNotebookPathFromIframe() {
+    const iframe = document.getElementById('notebook-iframe');
+    if (!iframe) return null;
+    const src = iframe.src || '';
+    // Support classic Notebook and Lab routes
+    let match = src.match(/\/jupyter\/notebooks\/([^?]+)/);
+    if (!match) {
+        match = src.match(/\/jupyter\/lab\/(?:workspaces\/[^/]+\/)?tree\/([^?]+)/);
+    }
+    return match ? decodeURIComponent(match[1]) : null;
+}
+
+// Perform an in-place refresh via JupyterLab's docmanager without navigation
+async function refreshNotebookIframeLabSafe() {
+    const iframe = document.getElementById('notebook-iframe');
+    if (!iframe) { console.log('No notebook iframe found; skipping refresh'); return; }
+    const win = iframe.contentWindow;
+    if (!win) { console.log('No iframe contentWindow; skipping refresh'); return; }
+
+    const iframeSrc = iframe.src || '';
+    const path = getNotebookPathFromIframe();
+    console.log('🔎 Lab refresh context:', { iframeSrc, extractedPath: path });
+
+    if (!path) {
+        console.warn('Lab refresh: could not extract notebook path from iframe src');
+        return;
+    }
+
+    try {
+        const ready = await waitForLabApp(win, 10000);
+        if (!ready) {
+            console.warn('JupyterLab app not ready within timeout; skipping in-place refresh');
+            return;
+        }
+
+        // Command-based document refresh; avoids navigation and prompts
+        await win.jupyterapp.commands.execute('docmanager:reload', { path });
+        try { await win.jupyterapp.restored; } catch {}
+        try { win.jupyterapp.shell?.collapseLeft?.(); } catch {}
+        console.log('✅ Lab docmanager:reload executed');
+    } catch (e) {
+        console.warn('Lab refresh error:', e);
     }
 }
 

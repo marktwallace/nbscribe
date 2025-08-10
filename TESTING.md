@@ -28,7 +28,7 @@ Expected: Server starts on port 5317 without errors
 ```bash
 curl http://localhost:5317/health
 ```
-Expected: `{"status":"healthy","service":"nbscribe","version":"0.1.0"}`
+Expected: `{"status":"healthy","service":"nbscribe","version":"0.1.4"}`
 
 ### 3. API Info
 ```bash

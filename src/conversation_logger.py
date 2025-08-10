@@ -198,7 +198,7 @@ class ConversationLogger:
             return template.render(
                 session_id=session_id,
                 created_at=created_at,
-                version="0.1.0",
+                version="0.1.4",
                 messages=messages
             )
         except Exception as e:

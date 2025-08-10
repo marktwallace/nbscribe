@@ -24,8 +24,48 @@ class ChatInterface {
         this.loadSystemPrompt(); // Load system prompt for transparency
         this.renderExistingMarkdown(); // Render any existing messages
         this.scrollToBottom(); // Scroll to bottom on page load
+
+        // Initialize minimal JupyterLab view inside the iframe (no file tree)
+        this.initNotebookIframe();
         
         console.log('💬 CHAT INTERFACE: Constructor complete');
+    }
+
+    initNotebookIframe() {
+        try {
+            const iframe = document.getElementById('notebook-iframe');
+            if (!iframe) return;
+
+            const onReady = async () => {
+                const win = iframe.contentWindow;
+                if (!win) return;
+
+                // Wait for jupyterapp presence; file browser is disabled by config so no left area appears
+                const start = Date.now();
+                while (!win.jupyterapp && Date.now() - start < 12000) {
+                    await new Promise(r => setTimeout(r, 50));
+                }
+                if (!win.jupyterapp) return;
+
+                // Ensure single-document mode if available; left area should already be absent
+                try {
+                    try { await win.jupyterapp.restored; } catch {}
+                    const shell = win.jupyterapp.shell;
+                    if (shell && shell.mode !== 'single-document') {
+                        try { await win.jupyterapp.commands.execute('application:toggle-mode'); } catch {}
+                    }
+                } catch {}
+            };
+
+            // Run when iframe loads or is already loaded
+            if (iframe.complete && iframe.contentWindow && iframe.contentDocument?.readyState === 'complete') {
+                onReady();
+            } else {
+                iframe.addEventListener('load', onReady, { once: true });
+            }
+        } catch (e) {
+            console.warn('Notebook iframe init skipped:', e);
+        }
     }
     
     async loadSystemPrompt() {

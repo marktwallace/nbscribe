@@ -9,10 +9,10 @@
     <meta name="created" content="{{ created_at }}" />
     
     <!-- External CSS and JavaScript only -->
-    <link rel="stylesheet" href="/static/conversation.css">
-    <link rel="stylesheet" href="/static/chat-interface.css">
+    <link rel="stylesheet" href="/static/conversation.css?v={{ version | default('0.1.4') }}">
+    <link rel="stylesheet" href="/static/chat-interface.css?v={{ version | default('0.1.4') }}">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/5.1.1/marked.min.js"></script>
-    <script src="/static/markdown-renderer.js"></script>
+    <script src="/static/markdown-renderer.js?v={{ version | default('0.1.4') }}"></script>
 </head>
 <body>
     <header class="header">

@@ -6,7 +6,7 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML
 ## Current State Snapshot (Aug 2025)
 - Jupyter Notebook 7 is embedded via an iframe; the assistant proxies `/jupyter/*` as a minimal pass-through.
 - Kernel WebSocket proxy is a dumb tunnel: forwards text and binary frames, allows rapid reconnects, and does not throttle kernel GET polling.
-- After applying a directive, the notebook iframe auto-reloads so changes appear immediately.
+- After applying a directive, we refresh the open document in-place using JupyterLab commands when available. Classic full-page reloads are no longer acceptable.
 - JSON-first linear conversation is in place: initial User message carries full notebook JSON; post-approval messages include precise cell JSON updates/deletions. System prompt documents delete semantics.
 - Outstanding: token counting and conversation summarization. Optional future: point the iframe directly to the Jupyter server URL (no proxy) given intranet/VPN deployment and no CORS concerns.
 
@@ -127,6 +127,10 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML
   - [x] System prompt transparency (expandable view)
   - [x] Fix system prompt loading (`system_prompt.txt` vs `main.txt`)
   - [x] **Updated validation and parsing** for relative positioning
+- [x] **Directive rendering hardening**
+  - [x] Tolerant regex for tool blocks (optional fence languages, CRLF, whitespace)
+  - [x] Support `json` metadata fences and case-insensitive keys
+  - [x] Clear inline error when malformed
 - [x] **Notebook Modification REST API** ✅ **BASIC IMPLEMENTATION COMPLETE**
   - [x] Basic endpoint structure and validation
   - [x] Tool directive request/response models  
@@ -207,6 +211,21 @@ AI-powered Jupyter Notebook assistant with a lightweight FastAPI server and HTML
 5. **Conversation Summarization** - Summarize and restart conversations
 6. **System Prompt Updates** - Include delete operation significance and examples
 7. **UI State Message Compacting** - Expandable/collapsible state update messages
+
+## Focused Status: No-Prompt In-Place Refresh (Aug 2025)
+
+- Problem: Clicking Accept sometimes triggers a browser "Leave site?" dialog. Full navigations (Classic `/jupyter/notebooks/...`) cause prompts and kernel churn.
+- Target behavior: Always refresh the notebook in-place without navigation using JupyterLab commands.
+- Plan:
+  - Serve the iframe at the Lab document route: `/jupyter/lab/tree/<notebook_path>` so `window.jupyterapp.commands` is available.
+  - On Accept, execute `docmanager:revert` (or `docmanager:reload`) inside the iframe to refresh the model without page navigation.
+  - On iframe load, minimize the Lab chrome (hide left area, single-document mode) so the UI remains notebook-only.
+- Current code:
+  - Frontend (`static/chat-interface.js`): initializes the iframe, hides left panel, tries Lab commands on Accept, falls back only if Lab app missing.
+  - Frontend (`static/markdown-renderer.js`): tolerant tool parsing; renders approve buttons reliably.
+  - Prompt (`prompts/system_prompt.txt`): explicitly requires ```python code fence and an immediate second fenced metadata block (or ```json), no prose between.
+- Remaining action:
+  - Ensure the template uses `/jupyter/lab/tree/<notebook_path>` for `notebook_iframe_url` so the Lab command registry is always present. This removes Classic reloads and the browser prompt.
 
 - [ ] **Audit Logging Integration**
   - [x] Save full Markdown chat history with tool directives

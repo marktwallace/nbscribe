@@ -30,6 +30,8 @@ class NotebookServerManager:
         self.port: Optional[int] = None
         self.process: Optional[subprocess.Popen] = None
         self.base_url = "/jupyter"
+        # Path to our app-specific Jupyter config directory (contains labconfig/page_config.json)
+        self.app_jupyter_config_dir = str((Path(__file__).resolve().parent.parent / "jupyter_config").resolve())
         
         # Log capture
         self.stdout_lines = queue.Queue(maxsize=1000)
@@ -39,22 +41,53 @@ class NotebookServerManager:
     def _log_reader(self, pipe, log_queue, prefix):
         """Read from subprocess pipe and store in queue"""
         try:
+            # Suppress noisy kernel-missing tracebacks while still surfacing the concise warning
+            suppress_traceback = False
+            kernel_missing_context = False
+
             for line in iter(pipe.readline, ''):
-                if line:
-                    line = line.strip()
-                    # Log to console as well with immediate flush
-                    print(f"[Jupyter {prefix}] {line}", flush=True)
-                    logger.info(f"[Jupyter {prefix}] {line}")
-                    # Store in queue (remove oldest if full)
+                if not line:
+                    continue
+
+                raw = line.strip()
+
+                # Detect start of a kernel-missing warning
+                if (
+                    'Kernel does not exist:' in raw
+                    or ('/jupyter/api/kernels/' in raw and ' 404 ' in raw)
+                    or (' 404 GET ' in raw and '/jupyter/api/kernels/' in raw)
+                ):
+                    kernel_missing_context = True
+
+                # If we're currently suppressing traceback lines, stop suppression when a new log record begins
+                if suppress_traceback:
+                    if raw.startswith('['):
+                        suppress_traceback = False
+                        kernel_missing_context = False
+                    else:
+                        # Skip stack-frame lines for expected kernel-missing 404s
+                        continue
+
+                # If a traceback follows a known kernel-missing warning, suppress the traceback body
+                if kernel_missing_context and raw.startswith('Traceback (most recent call last):'):
+                    suppress_traceback = True
+                    # Do not print the traceback header; keep logs concise
+                    continue
+
+                # Log to console as well with immediate flush
+                print(f"[Jupyter {prefix}] {raw}", flush=True)
+                logger.info(f"[Jupyter {prefix}] {raw}")
+
+                # Store in queue (remove oldest if full)
+                try:
+                    log_queue.put_nowait(raw)
+                except queue.Full:
+                    # Remove oldest entry and add new one
                     try:
-                        log_queue.put_nowait(line)
-                    except queue.Full:
-                        # Remove oldest entry and add new one
-                        try:
-                            log_queue.get_nowait()
-                            log_queue.put_nowait(line)
-                        except queue.Empty:
-                            pass
+                        log_queue.get_nowait()
+                        log_queue.put_nowait(raw)
+                    except queue.Empty:
+                        pass
         except Exception as e:
             logger.error(f"Error reading {prefix} logs: {e}")
         finally:
@@ -148,6 +181,7 @@ class NotebookServerManager:
         
         logger.info(f"Starting Jupyter Notebook on port {self.port}")
         logger.debug(f"Command: {' '.join(cmd)}")
+        logger.info(f"Using JUPYTER_CONFIG_DIR={self.app_jupyter_config_dir}")
         
         # Start subprocess with output capture
         self.process = subprocess.Popen(
@@ -155,7 +189,8 @@ class NotebookServerManager:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=dict(os.environ, JUPYTER_CONFIG_DIR=str(Path.home() / ".jupyter"))
+            # Ensure our JupyterLab page configuration is applied (disables file browser, etc.)
+            env=dict(os.environ, JUPYTER_CONFIG_DIR=self.app_jupyter_config_dir)
         )
         
         # Start log reading threads

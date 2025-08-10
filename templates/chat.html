@@ -4,16 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title | default("nbscribe - Conversation Log") }}</title>
-    <meta name="generator" content="nbscribe {{ version | default('0.1.0') }}">
+    <meta name="generator" content="nbscribe {{ version | default('0.1.4') }}">
     <meta name="conversation-id" content="{{ conversation_id | default('default') }}">
     <meta name="created" content="{{ created_at | default('') }}">
     
     <!-- External CSS and JavaScript -->
-    <link rel="stylesheet" href="/static/conversation.css">
-    <link rel="stylesheet" href="/static/chat-interface.css">
+    <link rel="stylesheet" href="/static/conversation.css?v={{ version | default('0.1.4') }}">
+    <link rel="stylesheet" href="/static/chat-interface.css?v={{ version | default('0.1.4') }}">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/5.1.1/marked.min.js"></script>
-    <script src="/static/markdown-renderer.js"></script>
-    <script src="/static/chat-interface.js"></script>
+    <script src="/static/markdown-renderer.js?v={{ version | default('0.1.4') }}"></script>
+    <script src="/static/chat-interface.js?v={{ version | default('0.1.4') }}"></script>
 </head>
 <body>
     <div class="split-container{% if chat_only %} chat-only{% endif %}">
