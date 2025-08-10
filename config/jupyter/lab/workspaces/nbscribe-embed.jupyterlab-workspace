@@ -1,0 +1,27 @@
+{
+  "data": {
+    "layout-restorer:data": {
+      "main": {
+        "dock": {
+          "mode": "single-document",
+          "main": {
+            "current": null,
+            "widgets": []
+          }
+        },
+        "left": {
+          "collapsed": true,
+          "widgets": []
+        },
+        "right": {
+          "collapsed": true,
+          "widgets": []
+        }
+      }
+    }
+  },
+  "metadata": {
+    "id": "nbscribe-embed"
+  },
+  "schemaVersion": 1
+}

@@ -14,6 +14,7 @@ class ChatInterface {
         this.loadingIndicator = document.getElementById('loading-indicator');
         this.errorMessage = document.getElementById('error-message');
         this.systemPromptContent = document.getElementById('system-prompt-content');
+        this.notebookIframe = document.getElementById('notebook-iframe');
         
         // Extract session ID from page metadata
         this.sessionId = document.querySelector('meta[name="conversation-id"]').getAttribute('content');
@@ -24,6 +25,7 @@ class ChatInterface {
         this.loadSystemPrompt(); // Load system prompt for transparency
         this.renderExistingMarkdown(); // Render any existing messages
         this.scrollToBottom(); // Scroll to bottom on page load
+        this.initNotebookIframeControls(); // Ensure Lab starts in single-document with sidebar hidden
         
         console.log('💬 CHAT INTERFACE: Constructor complete');
     }
@@ -43,6 +45,40 @@ class ChatInterface {
             console.warn('Failed to load system prompt:', error);
             this.systemPromptContent.textContent = 'Failed to load system prompt.';
         }
+    }
+
+    initNotebookIframeControls() {
+        const iframe = this.notebookIframe;
+        if (!iframe) return;
+        const applyLayout = () => {
+            try {
+                const win = iframe.contentWindow;
+                if (!win || !win.jupyterapp) {
+                    return;
+                }
+                // Prefer shell property if available
+                const shell = win.jupyterapp.shell;
+                if (shell) {
+                    try { if (shell.mode !== 'single-document') shell.mode = 'single-document'; } catch {}
+                    try { if (typeof shell.collapseLeft === 'function') shell.collapseLeft(); } catch {}
+                    try { if ('leftCollapsed' in shell) shell.leftCollapsed = true; } catch {}
+                }
+                // Fall back to commands
+                const cmds = win.jupyterapp.commands;
+                if (cmds && typeof cmds.execute === 'function') {
+                    try { cmds.execute('application:toggle-mode'); } catch {}
+                    try { cmds.execute('application:toggle-left-area'); } catch {}
+                }
+            } catch (e) {
+                console.warn('Failed to apply Lab layout in iframe:', e);
+            }
+        };
+        iframe.addEventListener('load', () => {
+            // Apply immediately, and again shortly after to catch late-init
+            applyLayout();
+            setTimeout(applyLayout, 250);
+            setTimeout(applyLayout, 750);
+        });
     }
     
     initMarkdown() {

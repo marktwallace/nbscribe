@@ -31,6 +31,11 @@ class NotebookServerManager:
         self.process: Optional[subprocess.Popen] = None
         self.base_url = "/jupyter"
         
+        # Project-scoped Jupyter configuration (do not use ~/.jupyter)
+        self.project_config_dir = Path("config/jupyter")
+        self.project_lab_settings_dir = self.project_config_dir / "lab" / "user-settings"
+        self.project_lab_workspaces_dir = self.project_config_dir / "lab" / "workspaces"
+        
         # Log capture
         self.stdout_lines = queue.Queue(maxsize=1000)
         self.stderr_lines = queue.Queue(maxsize=1000)
@@ -129,6 +134,9 @@ class NotebookServerManager:
         if notebook_dir is None:
             notebook_dir = Path.cwd()
         
+        # Ensure project-local JupyterLab single-document mode is configured
+        self._ensure_lab_single_document_mode()
+        
         # Build command - minimal configuration for AI-assisted editing
         cmd = [
             "jupyter", "notebook",
@@ -155,7 +163,7 @@ class NotebookServerManager:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=dict(os.environ, JUPYTER_CONFIG_DIR=str(Path.home() / ".jupyter"))
+            env=self._build_jupyter_env()
         )
         
         # Start log reading threads
@@ -210,6 +218,81 @@ class NotebookServerManager:
             time.sleep(0.5)
             
         raise RuntimeError(f"Jupyter server did not start within {timeout} seconds")
+    
+    def _ensure_lab_single_document_mode(self) -> None:
+        """Create project-scoped Lab settings that force single-document mode."""
+        try:
+            # Ensure directories exist
+            settings_pkg_dir = self.project_lab_settings_dir / "@jupyterlab" / "application-extension"
+            settings_pkg_dir.mkdir(parents=True, exist_ok=True)
+            self.project_lab_workspaces_dir.mkdir(parents=True, exist_ok=True)
+
+            settings_file = settings_pkg_dir / "application.jupyterlab-settings"
+            desired = {
+                "mode": "single-document"
+            }
+            # Write only if missing or different
+            write_file = True
+            if settings_file.exists():
+                try:
+                    import json
+                    current = json.loads(settings_file.read_text(encoding="utf-8") or "{}")
+                    if current == desired:
+                        write_file = False
+                except Exception:
+                    write_file = True
+            if write_file:
+                import json
+                settings_file.write_text(json.dumps(desired, indent=2), encoding="utf-8")
+                logger.info(f"Wrote Lab single-document settings: {settings_file}")
+        except Exception as e:
+            logger.error(f"Failed to prepare Lab settings: {e}")
+        
+        # Seed a dedicated workspace with single-document mode and sidebars collapsed
+        try:
+            import json
+            workspace_id = "nbscribe-embed"
+            workspace_file = self.project_lab_workspaces_dir / f"{workspace_id}.jupyterlab-workspace"
+            desired_workspace = {
+                "data": {
+                    "layout-restorer:data": {
+                        "main": {
+                            "dock": {
+                                "mode": "single-document",
+                                "main": {"current": None, "widgets": []}
+                            },
+                            "left": {"collapsed": True, "widgets": []},
+                            "right": {"collapsed": True, "widgets": []}
+                        }
+                    }
+                },
+                "metadata": {"id": workspace_id},
+                "schemaVersion": 1
+            }
+            write_ws = True
+            if workspace_file.exists():
+                try:
+                    current_ws = json.loads(workspace_file.read_text(encoding="utf-8") or "{}")
+                    if current_ws == desired_workspace:
+                        write_ws = False
+                except Exception:
+                    write_ws = True
+            if write_ws:
+                workspace_file.write_text(json.dumps(desired_workspace, indent=2), encoding="utf-8")
+                logger.info(f"Seeded Lab workspace: {workspace_file}")
+        except Exception as e:
+            logger.error(f"Failed to seed Lab workspace: {e}")
+    
+    def _build_jupyter_env(self) -> dict:
+        """Build environment for Jupyter process, isolating from user ~/.jupyter."""
+        env = dict(os.environ)
+        # Use project-local config to avoid picking up user settings
+        env["JUPYTER_CONFIG_DIR"] = str(self.project_config_dir)
+        # Force Lab to use our project-scoped user settings (single-document mode)
+        env["JUPYTERLAB_SETTINGS_DIR"] = str(self.project_lab_settings_dir)
+        # Keep workspaces local as well to avoid persisting user-side layout
+        env["JUPYTERLAB_WORKSPACES_DIR"] = str(self.project_lab_workspaces_dir)
+        return env
     
     def stop(self) -> None:
         """Stop the Jupyter Notebook server"""

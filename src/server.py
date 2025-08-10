@@ -22,34 +22,62 @@ from collections import defaultdict, deque
 
 # Surgical log filter - suppress only the identified repetitive polling patterns
 class JupyterRepetitiveFilter(logging.Filter):
-    """Suppress only the specific repetitive Jupyter polling we've identified"""
+    """Suppress repetitive Jupyter/Lab asset and polling access logs while keeping important ones."""
     def filter(self, record):
-        if hasattr(record, 'getMessage'):
-            message = record.getMessage()
-            
-            # Only suppress these specific repetitive patterns
-            repetitive_patterns = [
-                '/checkpoints?',
-                '/contents?content=1&hash=0&',
-                '/contents?type=notebook&content=1',
-                '/contents?content=0&hash=1&',
-                '/kernels?',
-                '/sessions?',
-                '/kernelspecs?',
-                '/me?',
-                '/lab/api/settings',
-                '/lab/api/translations',
-                '/lsp/status',
-                '/lab/extensions/',
-                '/static/notebook/',
-            ]
-            
-            # Suppress if it's a GET request matching these patterns
-            if 'GET /jupyter/api/' in message:
-                if any(pattern in message for pattern in repetitive_patterns):
+        try:
+            message = record.getMessage() if hasattr(record, 'getMessage') else str(record)
+
+            # Quickly allow non-access lines
+            if '"' not in message:
+                return True
+
+            # Parse method and path from typical uvicorn access log line
+            # Example: 127.0.0.1:65106 - "GET /jupyter/lab/tree/foo.ipynb HTTP/1.1" 200 OK
+            import re
+            m = re.search(r'"(GET|HEAD|POST|PUT|DELETE|PATCH) ([^\s"]+)', message)
+            if not m:
+                return True
+            method = m.group(1)
+            path_qs = m.group(2)
+            path = path_qs.split('?', 1)[0]
+
+            # Allow non-GET/HEAD by default, except for extremely noisy workspace PUT 204
+            if method not in ("GET", "HEAD"):
+                # Suppress very noisy workspace layout updates (204)
+                if method == "PUT" and path.startswith('/jupyter/lab/api/workspaces') and ' 204 ' in message:
                     return False
-                    
-        return True
+                return True
+
+            # Noisy prefixes to suppress for GET/HEAD (static assets and polling)
+            noisy_prefixes = (
+                '/static/',
+                '/favicon.ico',
+                '/jupyter/static/',
+                '/jupyter/lab/static/',
+                '/jupyter/static/lab/',
+                '/jupyter/lab/extensions/',
+                '/jupyter/lab/api/settings',
+                '/jupyter/lab/api/translations',
+                '/jupyter/lsp/status',
+            )
+
+            if path.startswith(noisy_prefixes):
+                # Keep if an error status (4xx/5xx) is present
+                if any(f' {code}' in message for code in (' 4', ' 5')):
+                    return True
+                return False
+
+            # Contents API polling can be very verbose; suppress common forms
+            if path.startswith('/jupyter/api/contents'):
+                # Allow only when writing (non-GET handled above) or when status is error
+                if any(f' {code}' in message for code in (' 4', ' 5')):
+                    return True
+                return False
+
+            return True
+        except Exception:
+            # Fail open to avoid hiding logs if filter errors
+            return True
 
 # Apply surgical filter to suppress only identified noise
 logging.getLogger("uvicorn.access").addFilter(JupyterRepetitiveFilter())
@@ -958,6 +986,10 @@ def create_app():
                 logger = ConversationLogger()
                 logger.save_conversation_state(session_data['log_file'], session_data['messages'])
         
+        # Use a dedicated Lab workspace and reset layout so single-document setting applies
+        workspace_id = "nbscribe-embed"
+        lab_url = f"/jupyter/lab/workspaces/{workspace_id}/tree/{notebook_path}"
+
         return templates.TemplateResponse("chat.html", {
             "request": request,
             "title": f"nbscribe - {notebook_file.name}",
@@ -967,7 +999,8 @@ def create_app():
             "created_at": session_data['created_at'],
             "messages": session_data['messages'],
             "notebook_path": notebook_path,
-            "notebook_iframe_url": f"/jupyter/notebooks/{notebook_path}"
+            # Prefer JupyterLab UI; force a clean workspace so sidebars follow single-document mode
+            "notebook_iframe_url": lab_url
         })
     
     # Session-specific chat interface (legacy)
