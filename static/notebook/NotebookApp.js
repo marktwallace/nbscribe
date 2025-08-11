@@ -24,12 +24,19 @@ function Button({ onClick, children, disabled }) {
 export default function NotebookApp() {
   const [session, setSession] = React.useState(null);
   const [cells, setCells] = React.useState([
-    { id: crypto.randomUUID(), kind: 'code', source: 'print("Hello")', outputs: [], execution_count: null }
+    { 
+      id: crypto.randomUUID(), 
+      type: 'code', 
+      source: 'print("Hello")', 
+      outputs: [], 
+      executionCount: null 
+    }
   ]);
-  // Registry of live editor views keyed by cell ID; avoids React-triggered focus loss
-  const editorViewsRef = React.useRef(new Map());
   const [busy, setBusy] = React.useState(false);
   const [status, setStatus] = React.useState('');
+  
+  // Get notebook path from global config if available
+  const notebookPath = window.NBSCRIBE?.notebookPath;
 
   // Pre-warm the kernel/session to avoid a "first click does nothing" experience
   React.useEffect(() => {
@@ -49,50 +56,80 @@ export default function NotebookApp() {
   async function ensureSession() {
     if (session) return session;
     const mod = await import(`/static/notebook/kernelClient.js?v=${VERSION}`);
-    const s = await mod.startSession();
+    const s = await mod.startSession({ notebookPath });
     setSession(s);
     return s;
   }
 
   async function runCell(idx) {
-    const containerId = `out-${cells[idx].id}`;
-    const outEl = document.getElementById(containerId);
-    if (outEl) outEl.innerHTML = '';
+    console.log('NotebookApp: runCell() called', { idx, cellId: cells[idx]?.id });
+    
     try {
-      if (!session) {
-        setBusy(true); setStatus('Starting kernel...');
-      }
+      // Only set busy state at start - don't clear outputs yet
+      setBusy(true); 
+      setStatus('Executing...');
+      
+      // Ensure we have a session
       const s = await ensureSession();
+      console.log('NotebookApp: Session ready', s.id);
+      
       const { execute } = await import(`/static/notebook/kernelClient.js?v=${VERSION}`);
-      const { renderIOPub } = await import(`/static/notebook/mime.js?v=${VERSION}`);
-      const liveView = editorViewsRef.current.get(cells[idx].id);
-      const codeToRun = liveView ? liveView.state.doc.toString() : cells[idx].source;
-      let sawMsg = false;
-      setBusy(true); setStatus('Executing...');
+      
+      // Get current value from textarea (might be newer than React state if user hasn't blurred)
+      const textareas = document.querySelectorAll('textarea');
+      const currentTextarea = textareas[idx]; // Assuming textareas are in same order as cells
+      const codeToRun = currentTextarea ? currentTextarea.value : cells[idx].source;
+      
+      console.log('NotebookApp: Executing code:', codeToRun);
+      
+      // Clear outputs and collect new ones
+      const newOutputs = [];
+      
       await execute(s, codeToRun, (msg) => {
-        try { console.debug('IOPub:', msg.header?.msg_type, msg); } catch (_) {}
-        if (outEl) {
-          renderIOPub(msg, outEl);
-          sawMsg = true;
+        const msgType = msg?.header?.msg_type;
+        console.log('NotebookApp: IOPub message:', msgType);
+        
+        if (msgType && msgType !== 'status') {
+          newOutputs.push(msg);
         }
       });
-      if (!sawMsg && outEl) {
-        const div = document.createElement('div');
-        div.style.color = '#6b7280';
-        div.textContent = '(no output)';
-        outEl.appendChild(div);
-      }
+      
+      console.log('NotebookApp: Execution complete, updating cell with', newOutputs.length, 'outputs');
+      
+      // Standard React immutable update pattern with extensive logging
+      setCells(prevCells => {
+        console.log('setCells FINAL: Before update, cell outputs:', prevCells[idx]?.outputs?.length || 0);
+        const newOutputsToSet = newOutputs.length > 0 ? newOutputs : [{ type: 'no-output', content: '(no output)' }];
+        
+        const nextCells = [...prevCells];
+        const oldCell = nextCells[idx];
+        nextCells[idx] = {
+          ...nextCells[idx],
+          outputs: newOutputsToSet
+        };
+        
+        console.log('setCells FINAL: After update, cell outputs:', nextCells[idx].outputs.length);
+        console.log('setCells FINAL: Array changed?', nextCells !== prevCells);
+        console.log('setCells FINAL: Cell changed?', nextCells[idx] !== oldCell);
+        console.log('setCells FINAL: Outputs changed?', nextCells[idx].outputs !== oldCell.outputs);
+        console.log('setCells FINAL: Cell ID:', nextCells[idx].id);
+        
+        return nextCells;
+      });
+      
     } catch (e) {
-      console.error('Run failed', e);
-      if (outEl) {
-        const div = document.createElement('div');
-        div.style.color = '#b91c1c';
-        div.style.whiteSpace = 'pre-wrap';
-        div.textContent = String(e?.message || e);
-        outEl.appendChild(div);
-      }
+      console.error('NotebookApp: Execution failed', e);
+      setCells(prevCells => {
+        const nextCells = [...prevCells];
+        nextCells[idx] = {
+          ...nextCells[idx],
+          outputs: [{ type: 'error', content: String(e?.message || e) }]
+        };
+        return nextCells;
+      });
     } finally {
-      setBusy(false); setStatus('');
+      setBusy(false); 
+      setStatus('');
     }
   }
 
@@ -115,62 +152,163 @@ export default function NotebookApp() {
     await restart(session);
   }
 
-  function addCell(kind = 'code') {
-    setCells((prev) => [...prev, { id: crypto.randomUUID(), kind, source: '', outputs: [], execution_count: null }]);
+  function addCell(type = 'code') {
+    setCells(prev => [...prev, { 
+      id: crypto.randomUUID(), 
+      type, 
+      source: '', 
+      outputs: [], 
+      executionCount: null 
+    }]);
   }
 
-  function updateCell(idx, value) {
-    // Update without replacing the array reference if possible to avoid re-render storms
-    setCells((prev) => {
-      const next = prev.slice();
-      next[idx] = { ...next[idx], source: value };
+  function OutputRenderer({ msg }) {
+    const msgType = msg?.header?.msg_type;
+    console.log('OutputRenderer: Rendering message', { msgType, msgStructure: msg });
+    
+    if (msg.type === 'no-output') {
+      return React.createElement('div', { 
+        style: { color: '#6b7280', fontStyle: 'italic' } 
+      }, msg.content);
+    }
+    
+    if (msg.type === 'error') {
+      return React.createElement('div', { 
+        style: { color: '#b91c1c', whiteSpace: 'pre-wrap' } 
+      }, msg.content);
+    }
+    
+    if (msgType === 'stream') {
+      const text = msg.content?.text ?? '';
+      console.log('OutputRenderer: Rendering stream with text:', text);
+      return React.createElement('div', { 
+        style: { 
+          whiteSpace: 'pre-wrap',
+          backgroundColor: '#f0f9ff',
+          padding: '4px',
+          border: '1px solid #ccc',
+          marginBottom: '4px'
+        } 
+      }, text);
+    }
+    
+    if (msgType === 'execute_input') {
+      console.log('OutputRenderer: Ignoring execute_input message');
+      return null; // Don't render execute_input messages
+    }
+    
+    if (msgType === 'error') {
+      const e = msg.content || {};
+      const errorText = `${e.ename || 'Error'}: ${e.evalue || ''}\n${(e.traceback || []).join('\n')}`;
+      return React.createElement('div', { 
+        style: { 
+          whiteSpace: 'pre-wrap',
+          color: '#b91c1c',
+          backgroundColor: '#fef2f2',
+          padding: '4px',
+          border: '1px solid #fca5a5',
+          marginBottom: '4px'
+        } 
+      }, errorText);
+    }
+    
+    if (msgType === 'execute_result' || msgType === 'display_data') {
+      const data = msg.content?.data || {};
+      if (data['text/plain']) {
+        const text = Array.isArray(data['text/plain']) ? data['text/plain'].join('') : data['text/plain'];
+        return React.createElement('div', { 
+          style: { 
+            whiteSpace: 'pre-wrap',
+            padding: '4px',
+            border: '1px solid #ccc',
+            marginBottom: '4px'
+          } 
+        }, text);
+      }
+      if (data['text/html']) {
+        const html = Array.isArray(data['text/html']) ? data['text/html'].join('') : data['text/html'];
+        return React.createElement('div', { 
+          style: { 
+            padding: '4px',
+            border: '1px solid #ccc',
+            marginBottom: '4px'
+          },
+          dangerouslySetInnerHTML: { __html: html }
+        });
+      }
+    }
+    
+    console.log('OutputRenderer: Unknown message type, falling back to debug display');
+    return React.createElement('div', { 
+      style: { color: '#6b7280', fontStyle: 'italic' } 
+    }, `[${msgType || 'unknown'}] ${JSON.stringify(msg)}`);
+  }
+
+  function updateCell(idx, source) {
+    setCells(prev => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], source };
       return next;
     });
   }
 
   function CellView({ cell, index }) {
-    const isCode = cell.kind === 'code';
+    const isCode = cell.type === 'code';
+    console.log('CellView render:', { cellId: cell.id, outputCount: cell.outputs.length, timestamp: Date.now() });
+    console.log('CellView outputs detail:', cell.outputs);
+    console.log('CellView: Why is this rendering? Cell reference changed?', Math.random());
+    
+
+    
     return (
       React.createElement('div', { style: { marginBottom: 16 } },
         React.createElement('div', null,
           React.createElement('select', {
-            value: cell.kind,
-            onChange: (e) => setCells((prev) => prev.map((c, i) => i === index ? { ...c, kind: e.target.value } : c))
+            value: cell.type,
+            onChange: (e) => setCells(prev => prev.map((c, i) => i === index ? { ...c, type: e.target.value } : c))
           },
             React.createElement('option', { value: 'code' }, 'Code'),
             React.createElement('option', { value: 'markdown' }, 'Markdown')
           )
         ),
         isCode
-          ? React.createElement(React.Suspense, { fallback: React.createElement('div', null, 'Loading editor...') },
-              React.createElement(EditorLazy, {
-                value: cell.source,
-                onReady: (view) => {
-                  // Keep the editor in control of its own content; only update state on blur
-                  if (view) {
-                    editorViewsRef.current.set(cell.id, view);
-                    view.dom.addEventListener('blur', () => {
-                      try {
-                        const text = view.state.doc.toString();
-                        updateCell(index, text);
-                      } catch (_) {}
-                    }, { capture: true });
-                  } else {
-                    editorViewsRef.current.delete(cell.id);
-                  }
-                }
-              })
-            )
-          : React.createElement('textarea', {
+          ? React.createElement('textarea', {
+              key: cell.id, // Ensure React doesn't reuse across different cells
               defaultValue: cell.source,
-              onInput: (e) => updateCell(index, e.target.value),
+              onBlur: (e) => updateCell(index, e.target.value),
+              rows: 3,
+              style: { width: '100%', fontFamily: 'monospace', fontSize: '14px' },
+              placeholder: 'Enter Python code...'
+            })
+          : React.createElement('textarea', {
+              key: cell.id,
+              defaultValue: cell.source,
+              onBlur: (e) => updateCell(index, e.target.value),
               rows: 4,
-              style: { width: '100%' }
+              style: { width: '100%' },
+              placeholder: 'Enter markdown...'
             }),
         isCode && React.createElement('div', { style: { marginTop: 8 } },
           React.createElement(Button, { onClick: () => runCell(index) }, 'Run')
         ),
-        React.createElement('div', { id: `out-${cell.id}`, style: { marginTop: 8 } })
+        React.createElement('div', { 
+          style: { 
+            marginTop: 8, 
+            minHeight: '20px',
+            border: '1px dashed #ccc',
+            padding: '4px',
+            backgroundColor: '#f9f9f9'
+          }
+        }, 
+          cell.outputs.length > 0 
+            ? cell.outputs.map((msg, i) => 
+                React.createElement(OutputRenderer, { 
+                  key: `${cell.id}-output-${i}`, 
+                  msg 
+                })
+              )
+            : '(output will appear here)'
+        )
       )
     );
   }

@@ -75,9 +75,18 @@ async function waitForKernelIdle(kernel, timeoutMs = 15000) {
 }
 
 export async function execute(session, code, onIOPub) {
-  const future = session.kernel.requestExecute({ code, stop_on_error: true }, true);
-  future.onIOPub = onIOPub;
-  await future.done;
+  console.log('KernelClient: execute() called', { code, sessionId: session.id });
+  try {
+    const future = session.kernel.requestExecute({ code, stop_on_error: true }, true);
+    console.log('KernelClient: requestExecute created future', future);
+    future.onIOPub = onIOPub;
+    console.log('KernelClient: onIOPub handler set, waiting for future.done');
+    await future.done;
+    console.log('KernelClient: execution completed');
+  } catch (error) {
+    console.error('KernelClient: execute() error', error);
+    throw error;
+  }
 }
 
 export const interrupt = (s) => s.kernel.interrupt();

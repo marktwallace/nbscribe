@@ -11,21 +11,26 @@
     <!-- External CSS and JavaScript -->
     <link rel="stylesheet" href="/static/conversation.css?v={{ version | default('0.1.4') }}">
     <link rel="stylesheet" href="/static/chat-interface.css?v={{ version | default('0.1.4') }}">
+    {% if not chat_only %}
+    <link rel="stylesheet" href="/static/notebook/notebook.css?v={{ version | default('0.1.4') }}">
+    {% endif %}
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/5.1.1/marked.min.js"></script>
     <script src="/static/markdown-renderer.js?v={{ version | default('0.1.4') }}"></script>
     <script src="/static/chat-interface.js?v={{ version | default('0.1.4') }}"></script>
 </head>
 <body>
     <div class="split-container{% if chat_only %} chat-only{% endif %}">
-        <!-- Left Pane: Jupyter Notebook -->
-        {% if not chat_only and notebook_iframe_url %}
+        <!-- Left Pane: React Notebook -->
+        {% if not chat_only %}
         <div class="notebook-pane">
-            <iframe 
-                id="notebook-iframe"
-                class="notebook-iframe" 
-                src="{{ notebook_iframe_url }}"
-                title="Jupyter Notebook"
-            ></iframe>
+            <div id="notebook-root"></div>
+            <script>
+                window.NBSCRIBE = { 
+                    version: "{{ version | default('0.1.4') }}",
+                    notebookPath: "{{ notebook_path | default('') }}"
+                };
+            </script>
+            <script type="module" src="/static/notebook/notebook.js?v={{ version | default('0.1.4') }}"></script>
         </div>
         {% endif %}
         

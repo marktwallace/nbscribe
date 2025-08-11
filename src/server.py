@@ -33,8 +33,10 @@ class JupyterRepetitiveFilter(logging.Filter):
                 '/contents?content=1&hash=0&',
                 '/contents?type=notebook&content=1',
                 '/contents?content=0&hash=1&',
-                '/kernels?',
-                '/sessions?',
+                '/kernels HTTP/1.1" 200',  # Successful kernel polls
+                '/kernels HTTP/1.1" 304',  # Not modified kernel polls
+                '/sessions HTTP/1.1" 200', # Successful session polls
+                '/sessions HTTP/1.1" 304', # Not modified session polls
                 '/kernelspecs?',
                 '/me?',
                 '/lab/api/settings',
@@ -48,6 +50,10 @@ class JupyterRepetitiveFilter(logging.Filter):
             if 'GET /jupyter/api/' in message:
                 if any(pattern in message for pattern in repetitive_patterns):
                     return False
+            
+            # Suppress static file requests unless they're errors
+            if 'GET /static/' in message and (' 200 ' in message or ' 304 ' in message):
+                return False
                     
         return True
 
@@ -142,7 +148,10 @@ def create_app():
     # Set up Jinja2 templates
     templates = Jinja2Templates(directory="templates")
 
-    # Data models for API - must be defined before functions that reference them
+    # Version constant - single source of truth
+    NBSCRIBE_VERSION = "0.1.29"
+
+# Data models for API - must be defined before functions that reference them
     class ChatMessage(BaseModel):
         message: str
         session_id: str = None
@@ -874,16 +883,32 @@ def create_app():
             "recent_notebooks": recent_notebooks
         })
     
-    # Thin notebook UI route (new minimal client, no embedded Jupyter UI)
-    @app.get("/notebook", response_class=HTMLResponse)
-    @app.get("/notebook/", response_class=HTMLResponse)
-    async def serve_thin_notebook(request: Request):
+    # Main AI conversation interface with notebook integration
+    @app.get("/notebook/{notebook_path:path}", response_class=HTMLResponse)
+    async def notebook_conversation(request: Request, notebook_path: str):
+        """AI conversation interface with specific notebook on LHS"""
         return templates.TemplateResponse(
-            "notebook.html",
+            "chat.html",
             {
                 "request": request,
-                "title": "nbscribe - Notebook",
-                "version": "0.1.7"
+                "title": f"nbscribe - {notebook_path}",
+                "notebook_path": notebook_path,
+                "version": NBSCRIBE_VERSION,
+                "chat_only": False  # Enable split-pane mode
+            }
+        )
+    
+    @app.get("/chat", response_class=HTMLResponse)  
+    @app.get("/chat/", response_class=HTMLResponse)
+    async def chat_interface(request: Request):
+        """AI conversation interface without notebook (chat-only mode)"""
+        return templates.TemplateResponse(
+            "chat.html",
+            {
+                "request": request,
+                "title": "nbscribe - AI Chat",
+                "version": NBSCRIBE_VERSION, 
+                "chat_only": True  # Chat-only mode
             }
         )
     
@@ -1028,6 +1053,7 @@ def create_app():
     @app.websocket("/jupyter/api/kernels/{kernel_id}/channels")
     async def jupyter_kernel_websocket(websocket: WebSocket, kernel_id: str):
         """Proxy WebSocket for Jupyter kernel channels - this is crucial for cell execution"""
+        print(f"🔌 KERNEL WEBSOCKET: New connection for kernel {kernel_id}")
         logging.info(f"🔌 WEBSOCKET HANDLER CALLED: kernel_id={kernel_id}")
         logging.info(f"🔌 WEBSOCKET QUERY PARAMS: {dict(websocket.query_params)}")
         
