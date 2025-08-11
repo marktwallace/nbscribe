@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title or "nbscribe - Notebook" }}</title>
+    <link rel="stylesheet" href="/static/notebook/notebook.css?v={{ version }}" />
+  </head>
+  <body>
+    <div id="notebook-root"></div>
+    <script>
+      window.NBSCRIBE = { version: "{{ version }}" };
+    </script>
+    <script type="module" src="/static/notebook/notebook.js?v={{ version }}"></script>
+  </body>
+  </html>
+
+

@@ -1,0 +1,24 @@
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-ui);
+  color: #111827;
+  background: #ffffff;
+}
+
+.nb-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  font-weight: 600;
+}
+
+.nb-container {
+  padding: 16px;
+}
+
+

@@ -122,7 +122,7 @@ def create_app():
     app = FastAPI(
         title="nbscribe",
         description="AI-powered Jupyter Notebook assistant",
-        version="0.1.4"
+        version="0.1.0"
     )
     
     # Initialize notebook server manager
@@ -141,33 +141,6 @@ def create_app():
 
     # Set up Jinja2 templates
     templates = Jinja2Templates(directory="templates")
-
-    # --- Debug helpers for message flow ---
-    def _summarize_message(msg: dict, max_len: int = 160) -> str:
-        try:
-            role = msg.get('role')
-            ts = msg.get('timestamp', '')
-            content = str(msg.get('content', ''))
-            flat = content.replace('\n', ' ').strip()
-            if len(flat) > max_len:
-                flat = flat[:max_len] + '…'
-            has_tool = 'TOOL:' in content
-            has_fence = '```' in content
-            return f"{role or '?'} @ {ts}: {flat} [len={len(content)} tool={int(has_tool)} fence={int(has_fence)}]"
-        except Exception:
-            return str(msg)
-
-    def _log_messages_debug(tag: str, messages: list, limit: int = 5) -> None:
-        try:
-            logging.info(f"MSG DEBUG [{tag}] total={len(messages)} show_last={min(limit, len(messages))}")
-            print(f"MSG DEBUG [{tag}] total={len(messages)} show_last={min(limit, len(messages))}")
-            for m in messages[-limit:]:
-                line = _summarize_message(m)
-                logging.info(f"MSG DEBUG [{tag}] {line}")
-                print(f"MSG DEBUG [{tag}] {line}")
-        except Exception as e:
-            logging.warning(f"MSG DEBUG [{tag}] failed: {e}")
-            print(f"MSG DEBUG [{tag}] failed: {e}")
 
     # Data models for API - must be defined before functions that reference them
     class ChatMessage(BaseModel):
@@ -356,41 +329,41 @@ def create_app():
             pos = find_cell_position(cells, directive.before)
             if pos is not None:
                 return pos
-            raise Exception(f"Cell ID '{directive.before}' not found for BEFORE positioning")
-
+            else:
+                raise Exception(f"Cell ID '{directive.before}' not found for BEFORE positioning")
+        
         elif directive.after:
             # Insert after the specified cell
             pos = find_cell_position(cells, directive.after)
-            if pos is None:
+            if pos is not None:
+                base = pos + 1
+                # If group info provided, maintain emission order for same-group AFTERs
+                if directive.group_id is not None and directive.seq is not None:
+                    index = base
+                    while index < len(cells):
+                        meta = cells[index].get("metadata", {})
+                        nbmeta = meta.get("nbscribe", {}) if isinstance(meta.get("nbscribe", {}), dict) else {}
+                        if (nbmeta.get("anchor_type") == "AFTER" and
+                            nbmeta.get("anchor_id") == directive.after and
+                            nbmeta.get("group_id") == directive.group_id and
+                            isinstance(nbmeta.get("seq"), int) and
+                            nbmeta.get("seq") < directive.seq):
+                            index += 1
+                            continue
+                        # Stop if we hit an item from same group but with seq >= ours, or a different anchor/group
+                        break
+                    return index
+                return base
+            else:
                 raise Exception(f"Cell ID '{directive.after}' not found for AFTER positioning")
-
-            base = pos + 1
-            # If group info provided, maintain emission order for same-group AFTERs
-            if directive.group_id is not None and directive.seq is not None:
-                index = base
-                while index < len(cells):
-                    meta = cells[index].get("metadata", {})
-                    nbmeta = meta.get("nbscribe", {}) if isinstance(meta.get("nbscribe", {}), dict) else {}
-                    if (
-                        nbmeta.get("anchor_type") == "AFTER"
-                        and nbmeta.get("anchor_id") == directive.after
-                        and nbmeta.get("group_id") == directive.group_id
-                        and isinstance(nbmeta.get("seq"), int)
-                        and nbmeta.get("seq") < directive.seq
-                    ):
-                        index += 1
-                        continue
-                    # Stop if we hit an item from same group but with seq >= ours, or a different anchor/group
-                    break
-                return index
-            return base
-
+        
         elif directive.pos is not None:
             # Direct position insertion (fallback)
             if 0 <= directive.pos <= len(cells):
                 return directive.pos
-            raise Exception(f"Position {directive.pos} is out of bounds (0-{len(cells)})")
-
+            else:
+                raise Exception(f"Position {directive.pos} is out of bounds (0-{len(cells)})")
+        
         else:
             raise Exception("No position specified for insert_cell (need BEFORE, AFTER, or POS)")
 
@@ -751,10 +724,6 @@ def create_app():
             
             # Load existing conversation context
             session_data = load_session_data(session_id)
-            logging.info(f"STREAM INCOMING session={session_id} user_len={len(message.message or '')}")
-            _log_messages_debug("pre-stream", session_data['messages'], limit=5)
-            logging.info(f"CHAT INCOMING session={session_id} user_len={len(message.message or '')}")
-            _log_messages_debug("pre-chat", session_data['messages'], limit=5)
             
             # Use linear conversation architecture
             conv_manager = get_conversation_manager()
@@ -770,14 +739,6 @@ def create_app():
             
             # Generate response using new linear conversation interface
             response_text = llm.generate_response(linear_messages, message.message)
-            try:
-                import re as _re
-                has_tool = 'TOOL:' in response_text or 'tool:' in response_text
-                fence_count = response_text.count('```')
-                dual_fence_tool = bool(_re.search(r"```[\w-]*[\t\x20]*\r?\n[\s\S]*?```[\t\x20]*\r?\n[\t\x20]*```[\w-]*[\t\x20]*\r?\n[\s\S]*?TOOL\s*:\s*.+?```", response_text, _re.IGNORECASE | _re.DOTALL))
-                logging.info(f"ASSISTANT TOOL DEBUG (non-stream) has_tool={int(has_tool)} fences={fence_count} dual_fence_tool={int(dual_fence_tool)} len={len(response_text)}")
-            except Exception as _e:
-                logging.warning(f"ASSISTANT TOOL DEBUG (non-stream) failed: {_e}")
             
             # Add new messages to conversation
             timestamp = datetime.now().isoformat()
@@ -797,7 +758,6 @@ def create_app():
             # Save updated conversation to HTML file
             logger = ConversationLogger()
             logger.save_conversation_state(session_data['log_file'], session_data['messages'])
-            _log_messages_debug("post-chat", session_data['messages'], limit=6)
             
             return ChatResponse(
                 response=response_text,
@@ -856,14 +816,6 @@ def create_app():
                     
                     # Response complete - save to file
                     timestamp = datetime.now().isoformat()
-                    try:
-                        import re as _re
-                        has_tool = 'TOOL:' in full_response or 'tool:' in full_response
-                        fence_count = full_response.count('```')
-                        dual_fence_tool = bool(_re.search(r"```[\w-]*[\t\x20]*\r?\n[\s\S]*?```[\t\x20]*\r?\n[\t\x20]*```[\w-]*[\t\x20]*\r?\n[\s\S]*?TOOL\s*:\s*.+?```", full_response, _re.IGNORECASE | _re.DOTALL))
-                        logging.info(f"ASSISTANT TOOL DEBUG (stream) has_tool={int(has_tool)} fences={fence_count} dual_fence_tool={int(dual_fence_tool)} len={len(full_response)}")
-                    except Exception as _e:
-                        logging.warning(f"ASSISTANT TOOL DEBUG (stream) failed: {_e}")
                     session_data['messages'].extend([
                         {
                             'role': 'user',
@@ -880,7 +832,6 @@ def create_app():
                     # Save updated conversation to HTML file
                     logger = ConversationLogger()
                     logger.save_conversation_state(session_data['log_file'], session_data['messages'])
-                    _log_messages_debug("post-stream", session_data['messages'], limit=6)
                     
                     # Send completion signal
                     yield f"data: {json.dumps({'type': 'complete', 'content': full_response})}\n\n"
@@ -923,129 +874,20 @@ def create_app():
             "recent_notebooks": recent_notebooks
         })
     
-    # Legacy chat-only route
-    @app.get("/chat")
-    async def chat_only():
-        """Redirect to latest session for chat-only mode"""
-        session_id = get_latest_session()
-        return RedirectResponse(url=f"/session/{session_id}", status_code=302)
-
-    # Create new session route
-    @app.get("/new")
-    async def new_session():
-        """Force create a new session"""
-        session_id = generate_session_id()
-        return RedirectResponse(url=f"/session/{session_id}", status_code=302)
-
-    # Notebook-specific interface
-    @app.get("/notebook/{notebook_path:path}", response_class=HTMLResponse)
-    async def serve_notebook_interface(request: Request, notebook_path: str):
-        """Serve split-pane interface for specific notebook"""
-        if not notebook_manager.is_running():
-            raise HTTPException(status_code=503, detail="Jupyter server not running")
-        
-        # Ensure notebook exists
-        notebook_file = Path(notebook_path)
-        if not notebook_file.exists():
-            raise HTTPException(status_code=404, detail=f"Notebook not found: {notebook_path}")
-        
-        # Create or get session for this notebook
-        session_id = f"notebook_{notebook_path.replace('/', '_').replace('.', '_')}"
-        session_data = load_session_data(session_id)
-        _log_messages_debug("serve-notebook-pre", session_data['messages'], limit=5)
-        
-        # For new notebook sessions, inject complete notebook JSON and greeting
-        if session_data['is_new']:
-            try:
-                # Get the complete notebook JSON
-                notebook_content = await get_notebook_content(notebook_path, notebook_manager)
-                if notebook_content:
-                    from src.conversation_manager import get_conversation_manager
-                    conv_manager = get_conversation_manager()
-
-                    # Create initial notebook JSON message as User message
-                    notebook_json_message = {
-                        'role': 'user',
-                        'content': conv_manager.format_notebook_for_ai(notebook_content),
-                        'timestamp': datetime.now().isoformat()
-                    }
-
-                    # Create assistant greeting that acknowledges seeing the notebook
-                    notebook_cell_count = len(notebook_content.get('cells', []))
-                    initial_message = {
-                        'role': 'assistant',
-                        'content': f"Hello! I can see your notebook `{notebook_file.name}` with {notebook_cell_count} cells. I understand the current structure and I'm ready to help you analyze, modify, or extend your code. What would you like to work on?",
-                        'timestamp': datetime.now().isoformat()
-                    }
-
-                    # Set the messages in proper order: notebook JSON first, then greeting
-                    session_data['messages'] = [notebook_json_message, initial_message]
-                else:
-                    # Fallback if we can't read the notebook
-                    initial_message = {
-                        'role': 'assistant',
-                        'content': f"Hello! I'm ready to help you with `{notebook_file.name}`. I can analyze your notebook and suggest code edits. What would you like to work on?",
-                        'timestamp': datetime.now().isoformat()
-                    }
-                    session_data['messages'] = [initial_message]
-
-                # Save updated conversation
-                from src.conversation_logger import ConversationLogger
-                logger = ConversationLogger()
-                logger.save_conversation_state(session_data['log_file'], session_data['messages'])
-
-            except Exception as e:
-                logging.error(f"Error initializing notebook session: {e}")
-                # Fallback to simple greeting
-                initial_message = {
-                    'role': 'assistant',
-                    'content': f"Hello! I'm ready to help you with `{notebook_file.name}`. I can analyze your notebook and suggest code edits. What would you like to work on?",
-                    'timestamp': datetime.now().isoformat()
-                }
-                session_data['messages'] = [initial_message]
-                from src.conversation_logger import ConversationLogger
-                logger = ConversationLogger()
-                logger.save_conversation_state(session_data['log_file'], session_data['messages'])
-        
-        # Build a per-session workspace ID so layout is isolated per session
-        workspace_id = f"nbscribe-embed-{session_id}"
-        # Seed the workspace layout so JupyterLab restores with left collapsed and single-document mode
-        try:
-            await seed_workspace_layout(workspace_id, notebook_manager)
-        except Exception as e:
-            logging.warning(f"Workspace seeding failed (non-fatal): {e}")
-
-        return templates.TemplateResponse("chat.html", {
-            "request": request,
-            "title": f"nbscribe - {notebook_file.name}",
-            "service_name": "nbscribe",
-            "version": "0.1.4",
-            "conversation_id": session_id,
-            "created_at": session_data['created_at'],
-            "messages": session_data['messages'],
-            "notebook_path": notebook_path,
-            # Use JupyterLab route with per-session workspace, so we can use Lab commands and keep UI minimal
-            "notebook_iframe_url": f"/jupyter/lab/workspaces/{workspace_id}/tree/{notebook_path}"
-        })
+    # Thin notebook UI route (new minimal client, no embedded Jupyter UI)
+    @app.get("/notebook", response_class=HTMLResponse)
+    @app.get("/notebook/", response_class=HTMLResponse)
+    async def serve_thin_notebook(request: Request):
+        return templates.TemplateResponse(
+            "notebook.html",
+            {
+                "request": request,
+                "title": "nbscribe - Notebook",
+                "version": "0.1.7"
+            }
+        )
     
-    # Session-specific chat interface (legacy)
-    @app.get("/session/{session_id}", response_class=HTMLResponse)
-    async def serve_session_interface(request: Request, session_id: str):
-        """Serve chat interface for specific session"""
-        # Load session data (creates new if doesn't exist)
-        session_data = load_session_data(session_id)
-        
-        return templates.TemplateResponse("chat.html", {
-            "request": request,
-            "title": f"nbscribe - Session {session_id}",
-            "service_name": "nbscribe",
-            "version": "0.1.4",
-            "conversation_id": session_id,
-            "created_at": session_data['created_at'],
-            "messages": session_data['messages'],  # Pass existing messages to template
-            "notebook_iframe_url": None,  # No notebook pane for chat-only sessions
-            "chat_only": True  # Flag to hide notebook pane
-        })
+    
 
     # API info endpoint
     @app.get("/api/info")
@@ -1053,7 +895,7 @@ def create_app():
         """Get API information"""
         return JSONResponse({
             "service": "nbscribe",
-            "version": "0.1.4",
+            "version": "0.1.0",
             "endpoints": {
                 "health": "/health",
                 "chat": "/api/chat",
@@ -1219,12 +1061,23 @@ def create_app():
         try:
             import websockets
             import asyncio
-            
-            await websocket.accept()
+
+            # Negotiate and forward WebSocket subprotocol expected by Jupyter (@jupyterlab/services)
+            client_subprotocols_header = websocket.headers.get('sec-websocket-protocol')
+            selected_subprotocol = None
+            if client_subprotocols_header:
+                # Client may send comma-separated list; choose the first
+                offered = [p.strip() for p in client_subprotocols_header.split(',') if p.strip()]
+                if offered:
+                    selected_subprotocol = offered[0]
+            await websocket.accept(subprotocol=selected_subprotocol)
             
             # Connect to upstream Jupyter server - token already in URL
             logging.info(f"WEBSOCKET FINAL URL: {target_url}")
-            upstream = await websockets.connect(target_url, max_size=None)
+            connect_kwargs = {"max_size": None}
+            if selected_subprotocol:
+                connect_kwargs["subprotocols"] = [selected_subprotocol]
+            upstream = await websockets.connect(target_url, **connect_kwargs)
             
             # Track connection state
             client_closed = asyncio.Event()
@@ -1387,11 +1240,9 @@ def create_app():
         # Build target URL
         target_url = f"http://localhost:{notebook_manager.port}/jupyter/{path}"
         
-        # Handle query parameters with auto-token injection for GET requests
+        # Handle query parameters with auto-token injection for ALL methods
         query_params = dict(request.query_params)
-        
-        # Auto-inject token for GET requests if not already present
-        if request.method == "GET" and "token" not in query_params:
+        if "token" not in query_params:
             query_params["token"] = notebook_manager.token
         
         # Add query parameters to URL
@@ -1485,96 +1336,6 @@ def create_app():
         except httpx.RequestError as e:
             logging.error(f"Jupyter proxy error: {e}")
             raise HTTPException(status_code=503, detail=f"Failed to connect to Jupyter server: {e}")
-
-    async def seed_workspace_layout(workspace_id: str, notebook_manager) -> None:
-        """Ensure a workspace exists with left/right areas collapsed and single-document mode.
-
-        Strategy:
-        - GET existing workspace; if not found, start from an empty layout.
-        - Recursively enforce `collapsed=True` on any left/right area sections and set any `mode` fields to
-          "single-document".
-        - PUT the updated workspace back so JupyterLab restores it deterministically on load.
-        """
-        try:
-            if not notebook_manager.is_running():
-                return
-
-            base_url = f"http://localhost:{notebook_manager.port}/jupyter/lab/api/workspaces/{workspace_id}"
-            params = {"token": notebook_manager.token}
-
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # Try to fetch existing workspace
-                workspace = None
-                try:
-                    resp = await client.get(base_url, params=params)
-                    logging.info(f"WORKSPACE GET {workspace_id} status={resp.status_code}")
-                    if resp.status_code == 200:
-                        try:
-                            workspace = resp.json()
-                            logging.info(f"WORKSPACE GET {workspace_id} data.shell: {workspace.get('data', {}).get('shell', {})}")
-                        except Exception as je:
-                            logging.warning(f"WORKSPACE GET parse failed: {je}")
-                except Exception:
-                    workspace = None
-
-                if not isinstance(workspace, dict):
-                    workspace = {"id": workspace_id, "data": {}, "metadata": {}}
-
-                data = workspace.get("data") or {}
-
-                # Heuristically enforce collapsed sidebars and single-document mode across data
-                def enforce_layout(obj):
-                    if isinstance(obj, dict):
-                        new_obj = {}
-                        for k, v in obj.items():
-                            # Normalize likely layout sections
-                            if k.lower() in ("left", "leftarea", "right", "rightarea"):
-                                # Ensure an object
-                                if not isinstance(v, dict):
-                                    v = {}
-                                v["collapsed"] = True
-                                new_obj[k] = enforce_layout(v)
-                                continue
-                            if k.lower() == "mode" and isinstance(v, str):
-                                new_obj[k] = "single-document"
-                                continue
-                            new_obj[k] = enforce_layout(v)
-                        return new_obj
-                    if isinstance(obj, list):
-                        return [enforce_layout(x) for x in obj]
-                    return obj
-
-                data = enforce_layout(data)
-
-                # Also set top-level shell mode and collapsed sidebars explicitly
-                shell = data.get("shell")
-                if not isinstance(shell, dict):
-                    shell = {}
-                shell["mode"] = "single-document"
-                # Ensure side areas exist and are collapsed
-                left_area = shell.get("leftArea")
-                if not isinstance(left_area, dict):
-                    left_area = {}
-                left_area["collapsed"] = True
-                shell["leftArea"] = left_area
-
-                right_area = shell.get("rightArea")
-                if not isinstance(right_area, dict):
-                    right_area = {}
-                right_area["collapsed"] = True
-                shell["rightArea"] = right_area
-
-                data["shell"] = shell
-
-                # Persist back
-                workspace["data"] = data
-                logging.info(f"WORKSPACE PUT {workspace_id} data.shell: {data.get('shell', {})}")
-                put_resp = await client.put(base_url, params=params, json=workspace)
-                logging.info(f"WORKSPACE PUT {workspace_id} status={put_resp.status_code}")
-
-        except Exception as e:
-            # Non-fatal; UI can still attempt runtime collapse
-            logging.warning(f"Failed to seed workspace layout for {workspace_id}: {e}")
     
     # Notebook server management endpoints
     @app.post("/api/notebook/start")
@@ -1677,10 +1438,6 @@ def create_app():
             cell_data = None
             operation_type = ""
             
-            inserted_index: Optional[int] = None
-            inserted_cell_obj = None
-            inserted_notebook_path = None
-
             if directive.tool == "insert_cell":
                 # Insert a new cell at the specified position
                 result_message = await insert_notebook_cell(
@@ -1691,7 +1448,6 @@ def create_app():
                 
                 # Get the inserted cell data for conversation update
                 notebook_path = extract_notebook_path_from_session(directive.session_id)
-                inserted_notebook_path = notebook_path
                 logging.info(f"POST-MOD DEBUG - Result message: {result_message}")
                 if notebook_path and "position" in result_message:
                     try:
@@ -1707,11 +1463,9 @@ def create_app():
                                 logging.info(f"POST-MOD DEBUG - Position regex match: {pos_match}")
                                 if pos_match:
                                     position = int(pos_match.group(1))
-                                    inserted_index = position
                                     logging.info(f"POST-MOD DEBUG - Extracted position: {position}")
                                     if position < len(cells):
                                         cell_data = cells[position]
-                                        inserted_cell_obj = cell_data
                                         logging.info(f"POST-MOD DEBUG - Found cell data: {cell_data.get('id', 'no-id')}")
                                     else:
                                         logging.warning(f"POST-MOD DEBUG - Position {position} >= cell count {len(cells)}")
@@ -1763,9 +1517,9 @@ def create_app():
             try:
                 from src.conversation_manager import get_conversation_manager
                 from src.conversation_logger import ConversationLogger
-
+                
                 conv_manager = get_conversation_manager()
-
+                
                 # Create the appropriate update message
                 if operation_type == "deleted":
                     update_message_content = conv_manager.format_cell_deletion(directive.cell_id)
@@ -1774,45 +1528,35 @@ def create_app():
                 else:
                     # Fallback if we couldn't get cell data
                     update_message_content = conv_manager.format_operation_failure(
-                        directive.tool,
-                        "Success but cell data unavailable for conversation",
-                        directive.cell_id,
+                        directive.tool, 
+                        "Success but cell data unavailable for conversation", 
+                        directive.cell_id
                     )
-
+                
                 # Add the update message to conversation history
                 if directive.session_id:
                     session_data = load_session_data(directive.session_id)
                     update_message = {
                         'role': 'user',
                         'content': update_message_content,
-                        'timestamp': datetime.now().isoformat(),
+                        'timestamp': datetime.now().isoformat()
                     }
                     session_data['messages'].append(update_message)
-
+                    
                     # Save updated conversation
                     logger = ConversationLogger()
                     logger.save_conversation_state(session_data['log_file'], session_data['messages'])
-
-                    logging.info(
-                        f"Added {operation_type} cell message to conversation: {directive.session_id}"
-                    )
-                    _log_messages_debug("post-approve", session_data['messages'], limit=4)
-
+                    
+                    logging.info(f"Added {operation_type} cell message to conversation: {directive.session_id}")
+                
             except Exception as e:
-                logging.error(
-                    f"Error adding post-modification message to conversation: {e}"
-                )
+                logging.error(f"Error adding post-modification message to conversation: {e}")
                 # Don't fail the whole operation if conversation update fails
             
             return JSONResponse({
                 "success": True,
                 "message": result_message,
-                "directive_id": directive.id,
-                **({
-                    "inserted_index": inserted_index,
-                    "cell": inserted_cell_obj,
-                    "notebook_path": inserted_notebook_path,
-                } if operation_type == "inserted" else {})
+                "directive_id": directive.id
             })
             
         except HTTPException:

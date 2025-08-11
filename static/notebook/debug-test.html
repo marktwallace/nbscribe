@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Test</title>
+</head>
+<body>
+    <div id="status">Testing...</div>
+    <div id="details"></div>
+    
+    <script type="module">
+        const status = document.getElementById('status');
+        const details = document.getElementById('details');
+        
+        async function runTests() {
+            const log = [];
+            
+            try {
+                log.push('1. Testing React import...');
+                const ReactModule = await import('https://esm.sh/react@18?dev');
+                const React = ReactModule.default || ReactModule;
+                log.push('✓ React loaded successfully');
+                
+                log.push('2. Testing @jupyterlab/services import...');
+                const jls = await import('https://esm.sh/@jupyterlab/services@7.4.5?bundle');
+                log.push('✓ @jupyterlab/services loaded successfully');
+                log.push(`   Available: ${Object.keys(jls).join(', ')}`);
+                
+                log.push('3. Testing kernel list API...');
+                const response = await fetch('/jupyter/api/kernels');
+                log.push(`   Response status: ${response.status}`);
+                const kernels = await response.json();
+                log.push(`   Current kernels: ${JSON.stringify(kernels)}`);
+                
+                log.push('4. Testing ServerConnection...');
+                const baseUrl = `${window.location.origin}/jupyter/`;
+                const wsUrl = baseUrl.replace(/^http/, 'ws');
+                const serverSettings = jls.ServerConnection.makeSettings({
+                    baseUrl,
+                    wsUrl,
+                    token: '',
+                    init: { credentials: 'omit' }
+                });
+                log.push('✓ ServerConnection settings created');
+                
+                log.push('5. Testing KernelManager...');
+                const kernelManager = new jls.KernelManager({ serverSettings });
+                if (kernelManager.ready) await kernelManager.ready;
+                log.push('✓ KernelManager ready');
+                
+                status.textContent = 'All tests passed!';
+                status.style.color = 'green';
+                
+            } catch (error) {
+                log.push(`❌ Error: ${error.message}`);
+                log.push(`   Stack: ${error.stack}`);
+                status.textContent = 'Test failed - see details';
+                status.style.color = 'red';
+            }
+            
+            details.innerHTML = log.map(line => `<div>${line}</div>`).join('');
+        }
+        
+        runTests();
+    </script>
+</body>
+</html>
