@@ -1,11 +1,14 @@
 fastapi
 uvicorn[standard]
 jinja2
-nbformat
+nbformat>=5.9,<6
 python-multipart
 openai
 python-dotenv
 langchain
 langchain-openai
 beautifulsoup4
-websockets 
+websockets
+jupyter_client>=8.6,<9
+ipykernel>=6.29,<7
+bleach>=6.1,<7

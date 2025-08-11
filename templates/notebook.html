@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block content %}
+  <h1 style="margin:0 0 1rem 0;">Notebook: {{ nb_path }}</h1>
+  <div id="nb">
+    {% for cell in cells %}
+      {% include '_cell.html' %}
+    {% endfor %}
+  </div>
+{% endblock %}
+
+

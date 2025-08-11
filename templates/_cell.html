@@ -1,0 +1,27 @@
+<div id="cell-{{ cell.id }}" class="cell">
+  {% if cell.cell_type == 'code' %}
+  <form hx-post="/nb/{{ nb_path }}/cells/{{ cell.id }}/save"
+        hx-target="#cell-{{ cell.id }}" hx-swap="outerHTML">
+    <textarea name="source" class="code" data-lang="python">{{ (cell.source|join('')) | e }}</textarea>
+    <div class="toolbar">
+      <button type="submit">Save</button>
+      <button type="button" data-run
+              hx-post="/nb/{{ nb_path }}/cells/{{ cell.id }}/run"
+              hx-target="#cell-{{ cell.id }}" hx-swap="outerHTML">Run</button>
+    </div>
+  </form>
+  <div id="out-{{ cell.id }}"
+       {% if run_now %} hx-ext="sse" sse-connect="/nb/{{ nb_path }}/cells/{{ cell.id }}/stream" sse-swap="output" hx-swap="beforeend" {% endif %}
+       ></div>
+  {% else %}
+    <form hx-post="/nb/{{ nb_path }}/cells/{{ cell.id }}/save"
+          hx-target="#cell-{{ cell.id }}" hx-swap="outerHTML">
+      <textarea name="source" class="md">{{ (cell.source|join('')) | e }}</textarea>
+      <div class="toolbar">
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  {% endif %}
+</div>
+
+

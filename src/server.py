@@ -141,6 +141,15 @@ def create_app():
 
     # Set up Jinja2 templates
     templates = Jinja2Templates(directory="templates")
+    # expose for routers
+    app.state.templates = templates
+
+    # Notebook UI (htmx/Jinja) routes
+    try:
+        from src import notebook_routes
+        app.include_router(notebook_routes.router)
+    except Exception as e:
+        logging.error(f"Failed to include notebook routes: {e}")
 
     # Data models for API - must be defined before functions that reference them
     class ChatMessage(BaseModel):

@@ -20,3 +20,7 @@ dependencies:
     - langchain-openai
     - beautifulsoup4
     - websockets 
+    - nbformat>=5.9,<6
+    - jupyter_client>=8.6,<9
+    - ipykernel>=6.29,<7
+    - bleach>=6.1,<7
