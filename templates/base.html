@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}nbscribe{% endblock %}</title>
+    
+    <!-- htmx 2.0.6 with SSE extension -->
+    <script src="https://unpkg.com/htmx.org@2.0.6/dist/htmx.min.js"></script>
+    <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+    
+    <!-- CodeMirror 5 for code editing -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/default.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/python/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/markdown/markdown.min.js"></script>
+    
+    <!-- Base styles -->
+    <style>
+        :root {
+            --background-primary: #ffffff;
+            --background-secondary: #f8f9fa;
+            --background-hover: #e9ecef;
+            --text-primary: #212529;
+            --text-secondary: #6c757d;
+            --border-color: #dee2e6;
+            --accent-color: #007bff;
+            --success-color: #28a745;
+            --warning-color: #ffc107;
+            --danger-color: #dc3545;
+            --code-background: #f8f9fa;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --background-primary: #1a1a1a;
+                --background-secondary: #2d2d2d;
+                --background-hover: #404040;
+                --text-primary: #ffffff;
+                --text-secondary: #b0b0b0;
+                --border-color: #404040;
+                --accent-color: #0d6efd;
+                --code-background: #2d2d2d;
+            }
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            line-height: 1.6;
+            color: var(--text-primary);
+            background-color: var(--background-primary);
+        }
+
+        /* Notebook container */
+        .notebook-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Header */
+        .notebook-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .notebook-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .notebook-path {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            font-family: monospace;
+        }
+
+        /* Toolbar */
+        .notebook-toolbar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 10px;
+            background: var(--background-secondary);
+            border-radius: 8px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--background-primary);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 0.9rem;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .btn:hover {
+            background: var(--background-hover);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: var(--accent-color);
+            color: white;
+            border-color: var(--accent-color);
+        }
+
+        .btn-primary:hover {
+            background: color-mix(in srgb, var(--accent-color) 90%, black);
+        }
+
+        .btn-danger {
+            background: var(--danger-color);
+            color: white;
+            border-color: var(--danger-color);
+        }
+
+        .btn-danger:hover {
+            background: color-mix(in srgb, var(--danger-color) 90%, black);
+        }
+
+        /* Cell styles */
+        .cell {
+            margin-bottom: 20px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--background-primary);
+        }
+
+        .cell-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: var(--background-secondary);
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .cell-type {
+            font-weight: 500;
+        }
+
+        .cell-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .cell-content {
+            padding: 12px;
+        }
+
+        /* CodeMirror integration */
+        .CodeMirror {
+            height: auto;
+            min-height: 100px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            font-size: 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+        }
+
+        .CodeMirror-focused {
+            border-color: var(--accent-color);
+        }
+
+        /* Cell outputs */
+        .cell-output {
+            margin-top: 12px;
+            padding: 12px;
+            background: var(--code-background);
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+        }
+
+        .output {
+            margin-bottom: 8px;
+        }
+
+        .output:last-child {
+            margin-bottom: 0;
+        }
+
+        .output pre {
+            margin: 0;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .stream-stdout {
+            color: var(--text-primary);
+        }
+
+        .stream-stderr {
+            color: var(--danger-color);
+        }
+
+        .output-error {
+            color: var(--danger-color);
+        }
+
+        .error-name {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .error-traceback {
+            font-size: 0.9em;
+            opacity: 0.8;
+        }
+
+        .output-image img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+        }
+
+        .output-html {
+            /* Allow styled HTML output */
+        }
+
+        .output-text {
+            color: var(--text-primary);
+        }
+
+        /* Loading and status indicators */
+        .htmx-indicator {
+            display: none;
+        }
+
+        .htmx-request .htmx-indicator {
+            display: inline;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid transparent;
+            border-top: 2px solid var(--accent-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Success/error states */
+        .save-success {
+            color: var(--success-color);
+            font-size: 0.85rem;
+            margin-left: 8px;
+        }
+
+        .save-error {
+            color: var(--danger-color);
+            font-size: 0.85rem;
+            margin-left: 8px;
+        }
+
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .notebook-container {
+                padding: 10px;
+            }
+
+            .notebook-toolbar {
+                flex-wrap: wrap;
+            }
+
+            .btn {
+                padding: 6px 12px;
+                font-size: 0.85rem;
+            }
+        }
+    </style>
+
+    {% block extra_head %}{% endblock %}
+</head>
+<body hx-ext="sse">
+    {% block content %}{% endblock %}
+
+    <!-- JavaScript for CodeMirror initialization and keyboard shortcuts -->
+    <script>
+        // Initialize CodeMirror for all textareas with data-mode attribute
+        function initializeCodeMirror() {
+            document.querySelectorAll('textarea[data-mode]').forEach(textarea => {
+                if (textarea.nextSibling && textarea.nextSibling.classList && textarea.nextSibling.classList.contains('CodeMirror')) {
+                    return; // Already initialized
+                }
+
+                const mode = textarea.dataset.mode;
+                const editor = CodeMirror.fromTextArea(textarea, {
+                    mode: mode,
+                    lineNumbers: false,
+                    theme: 'default',
+                    autoCloseBrackets: true,
+                    matchBrackets: true,
+                    indentUnit: 4,
+                    indentWithTabs: false,
+                    lineWrapping: true,
+                    extraKeys: {
+                        'Ctrl-Enter': function(cm) {
+                            // Find the run button for this cell
+                            const cell = cm.getTextArea().closest('.cell');
+                            const runBtn = cell.querySelector('.btn-run');
+                            if (runBtn && !runBtn.disabled) {
+                                runBtn.click();
+                            }
+                        },
+                        'Cmd-Enter': function(cm) {
+                            // Mac keyboard shortcut
+                            const cell = cm.getTextArea().closest('.cell');
+                            const runBtn = cell.querySelector('.btn-run');
+                            if (runBtn && !runBtn.disabled) {
+                                runBtn.click();
+                            }
+                        }
+                    }
+                });
+
+                // Auto-resize editor
+                editor.on('change', function() {
+                    editor.refresh();
+                });
+
+                // Store editor reference for later access
+                textarea.codeMirrorEditor = editor;
+            });
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded. htmx version:', typeof htmx !== 'undefined' ? htmx.version : 'NOT LOADED');
+            console.log('SSE extension loaded:', typeof htmx !== 'undefined' && htmx.config && 'sse' in htmx.config);
+            initializeCodeMirror();
+        });
+
+        // Re-initialize after htmx updates
+        document.body.addEventListener('htmx:afterSwap', initializeCodeMirror);
+        document.body.addEventListener('htmx:afterSettle', initializeCodeMirror);
+
+        // Handle SSE connection status
+        document.body.addEventListener('htmx:sseOpen', function(e) {
+            console.log('SSE connection opened for:', e.target);
+        });
+
+        document.body.addEventListener('htmx:sseClose', function(e) {
+            console.log('SSE connection closed for:', e.target);
+        });
+
+        document.body.addEventListener('htmx:sseError', function(e) {
+            console.error('SSE connection error:', e.detail);
+        });
+
+        // Debug SSE message receipt
+        document.body.addEventListener('htmx:sseMessage', function(e) {
+            console.log('SSE message received:', {
+                target: e.target,
+                data: e.detail.data,
+                type: e.detail.type,
+                raw: e.detail
+            });
+        });
+
+        // Debug any htmx swaps
+        document.body.addEventListener('htmx:beforeSwap', function(e) {
+            console.log('htmx:beforeSwap:', {
+                target: e.target,
+                swapStyle: e.detail.swapStyle,
+                content: e.detail.xhr ? e.detail.xhr.responseText : 'NO XHR'
+            });
+        });
+
+        document.body.addEventListener('htmx:afterSwap', function(e) {
+            console.log('htmx:afterSwap:', {
+                target: e.target,
+                innerHTML: e.target.innerHTML
+            });
+        });
+
+        // Handle ALL htmx requests to update CodeMirror content
+        document.body.addEventListener('htmx:configRequest', function(e) {
+            console.log('htmx:configRequest fired for:', e.target);
+            
+            // Sync ALL CodeMirror editors to their textareas before any request
+            let syncCount = 0;
+            document.querySelectorAll('textarea[data-mode]').forEach(textarea => {
+                if (textarea.codeMirrorEditor) {
+                    const oldValue = textarea.value;
+                    const newValue = textarea.codeMirrorEditor.getValue();
+                    textarea.value = newValue;
+                    syncCount++;
+                    console.log(`CodeMirror sync ${syncCount}:`, {
+                        oldValue: oldValue,
+                        newValue: newValue,
+                        changed: oldValue !== newValue,
+                        textareaName: textarea.name,
+                        textareaId: textarea.id
+                    });
+                } else {
+                    console.log('No CodeMirror editor found for textarea:', textarea);
+                }
+            });
+            
+            console.log(`Total CodeMirror editors synced: ${syncCount}`);
+            
+            // FORCE UPDATE: Directly inject CodeMirror content into request parameters
+            if (e.target.hasAttribute('hx-include')) {
+                const includeSelector = e.target.getAttribute('hx-include');
+                console.log('hx-include selector:', includeSelector);
+                
+                const includedElements = document.querySelectorAll(includeSelector);
+                console.log('hx-include found elements:', includedElements.length);
+                
+                includedElements.forEach((el, i) => {
+                    if (el.tagName === 'TEXTAREA' && el.codeMirrorEditor) {
+                        const cmValue = el.codeMirrorEditor.getValue();
+                        console.log(`FORCE updating textarea ${i} with CM content:`, cmValue);
+                        
+                        // Force the request to use CodeMirror content
+                        if (e.detail.parameters) {
+                            e.detail.parameters[el.name] = cmValue;
+                        } else {
+                            e.detail.parameters = {[el.name]: cmValue};
+                        }
+                        
+                        console.log(`hx-include element ${i}:`, {
+                            name: el.name,
+                            textareaValue: el.value,
+                            codeMirrorValue: cmValue,
+                            forcedValue: e.detail.parameters[el.name]
+                        });
+                    }
+                });
+            }
+        });
+    </script>
+
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

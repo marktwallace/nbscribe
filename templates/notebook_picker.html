@@ -259,7 +259,7 @@
                 <div class="notebook-list" id="recent-notebooks">
                     {% if recent_notebooks %}
                         {% for notebook in recent_notebooks %}
-                        <a href="/notebook/{{ notebook.path }}" class="notebook-item">
+                        <a href="/nb/{{ notebook.path }}" class="notebook-item">
                             <span class="notebook-icon">📓</span>
                             <div class="notebook-info">
                                 <div class="notebook-name">{{ notebook.name }}</div>
@@ -303,7 +303,7 @@
                     showStatus('Notebook created successfully!', 'success');
                     // Navigate to the new notebook
                     setTimeout(() => {
-                        window.location.href = `/notebook/${result.path}`;
+                        window.location.href = `/nb/${result.path}`;
                     }, 1000);
                 } else {
                     throw new Error(result.error || 'Failed to create notebook');

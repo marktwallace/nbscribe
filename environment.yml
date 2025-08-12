@@ -5,9 +5,10 @@ channels:
 dependencies:
   - python=3.12
   - pip
-  - jupyter
-  - jupyterlab
-  - nbformat
+  - nbformat>=5.9,<6
+  - jupyter_client>=8.6,<9
+  - ipykernel>=6.29,<7
+  - bleach>=6.1,<7
   - jinja2
   - pip:
     - fastapi
@@ -17,6 +18,4 @@ dependencies:
     - openai
     - python-dotenv
     - langchain
-    - langchain-openai
-    - beautifulsoup4
-    - websockets 
+    - langchain-openai 

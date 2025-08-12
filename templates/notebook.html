@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="notebook-container">
+    <!-- Header -->
+    <div class="notebook-header">
+        <div>
+            <h1 class="notebook-title">{{ notebook_path.split('/')[-1] }}</h1>
+            <div class="notebook-path">{{ notebook_path }}</div>
+        </div>
+        <div>
+            <a href="/" class="btn">← Back to Notebooks</a>
+        </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="notebook-toolbar">
+        <button class="btn btn-primary" 
+                hx-post="/nb/{{ notebook_path }}/run-all"
+                hx-target="#notebook-cells"
+                hx-swap="outerHTML">
+            <span class="htmx-indicator spinner"></span>
+            Run All
+        </button>
+        
+        <button class="btn" 
+                hx-post="/nb/{{ notebook_path }}/interrupt"
+                hx-target="#status-message">
+            Interrupt
+        </button>
+        
+        <button class="btn" 
+                hx-post="/nb/{{ notebook_path }}/restart"
+                hx-target="#status-message">
+            Restart Kernel
+        </button>
+        
+        <button class="btn" 
+                hx-post="/nb/{{ notebook_path }}/cells/add?cell_type=code"
+                hx-target="#notebook-cells"
+                hx-swap="beforeend">
+            + Code Cell
+        </button>
+        
+        <button class="btn" 
+                hx-post="/nb/{{ notebook_path }}/cells/add?cell_type=markdown"
+                hx-target="#notebook-cells"
+                hx-swap="beforeend">
+            + Markdown Cell
+        </button>
+        
+        <button class="btn" 
+                hx-post="/nb/{{ notebook_path }}/save"
+                hx-target="#status-message">
+            <span class="htmx-indicator spinner"></span>
+            Save
+        </button>
+    </div>
+
+    <!-- Status message area -->
+    <div id="status-message"></div>
+
+    <!-- Cells container -->
+    <div id="notebook-cells">
+        {% for cell in notebook.cells %}
+            {% include "_cell.html" %}
+        {% endfor %}
+        
+        {% if not notebook.cells %}
+        <div class="empty-notebook">
+            <p>This notebook is empty. Add a cell to get started!</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<style>
+    .empty-notebook {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--text-secondary);
+        font-style: italic;
+    }
+</style>
+{% endblock %}

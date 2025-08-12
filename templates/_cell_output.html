@@ -1,0 +1,35 @@
+<!-- Cell output fragment -->
+<div class="cell-output" 
+     {% if run_now %}
+     hx-get="/nb/{{ notebook_path }}/cells/{{ cell.id }}/execute"
+     hx-trigger="load"
+     hx-swap="innerHTML"
+     {% endif %}>
+    
+    {% if cell.outputs %}
+        {% for output in cell.outputs %}
+            {% if output.output_type == "stream" %}
+                <div class="output stream-{{ output.name }}">
+                    <pre>{{ output.text }}</pre>
+                </div>
+            {% elif output.output_type == "display_data" or output.output_type == "execute_result" %}
+                {% if output.data["text/html"] %}
+                    <div class="output output-html">{{ output.data["text/html"] | safe }}</div>
+                {% elif output.data["image/png"] %}
+                    <div class="output output-png"><img src="data:image/png;base64,{{ output.data["image/png"] }}"></div>
+                {% elif output.data["text/plain"] %}
+                    <div class="output output-text"><pre>{{ output.data["text/plain"] }}</pre></div>
+                {% endif %}
+            {% elif output.output_type == "error" %}
+                <div class="output error"><pre><b>{{ output.ename }}: {{ output.evalue }}</b>
+{{ output.traceback | join("\n") }}</pre></div>
+            {% endif %}
+        {% endfor %}
+    {% else %}
+        {% if run_now %}
+        <div class="output">
+            <span class="htmx-indicator spinner"></span> Executing...
+        </div>
+        {% endif %}
+    {% endif %}
+</div>

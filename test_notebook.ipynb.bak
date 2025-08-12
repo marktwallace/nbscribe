@@ -1,0 +1,57 @@
+{
+ "nbformat": 4,
+ "nbformat_minor": 5,
+ "metadata": {
+  "kernelspec": {
+   "name": "python3",
+   "display_name": "Python 3"
+  },
+  "language_info": {
+   "name": "python",
+   "version": "3.12.0"
+  }
+ },
+ "cells": [
+  {
+   "cell_type": "code",
+   "id": "ac726913",
+   "metadata": {
+    "id": "ac726913"
+   },
+   "source": [
+    "print('Hello from htmx nbscribe!')\n",
+    "import sys\n",
+    "print(f'Python version: {sys.version}')"
+   ],
+   "execution_count": null,
+   "outputs": []
+  },
+  {
+   "cell_type": "code",
+   "id": "5589a412",
+   "metadata": {
+    "id": "5589a412"
+   },
+   "source": [
+    "# Test basic math\n",
+    "result = 2 + 2\n",
+    "print(f'2 + 2 = {result}')\n",
+    "result"
+   ],
+   "execution_count": null,
+   "outputs": []
+  },
+  {
+   "cell_type": "markdown",
+   "id": "fff42f5d",
+   "metadata": {
+    "id": "fff42f5d"
+   },
+   "source": [
+    "# Test Markdown Cell\n",
+    "\n",
+    "This is a test markdown cell for the htmx interface."
+   ]
+  }
+ ]
+}

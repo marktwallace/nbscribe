@@ -1,0 +1,171 @@
+<!-- Cell fragment template -->
+<div class="cell" id="cell-{{ cell.id }}">
+    <!-- Cell header -->
+    <div class="cell-header">
+        <div class="cell-info">
+            <span class="cell-type">{{ cell.cell_type.title() }} Cell</span>
+            <span class="cell-id">{{ cell.id }}</span>
+            {% if cell.execution_count %}
+            <span class="execution-count">[{{ cell.execution_count }}]</span>
+            {% endif %}
+        </div>
+        
+        <div class="cell-actions">
+            {% if cell.cell_type == "code" %}
+            <button class="btn btn-primary btn-sm btn-run"
+                    hx-post="/nb/{{ notebook_path }}/cells/{{ cell.id }}/run"
+                    hx-target="#cell-{{ cell.id }} .cell-output"
+                    hx-swap="outerHTML"
+                    hx-include="#cell-{{ cell.id }} [name='content']">
+                <span class="htmx-indicator spinner"></span>
+                Run
+            </button>
+            {% endif %}
+            
+            <button class="btn btn-sm"
+                    hx-post="/nb/{{ notebook_path }}/cells/add?after={{ cell.id }}&cell_type=code"
+                    hx-target="#cell-{{ cell.id }}"
+                    hx-swap="afterend">
+                + Code
+            </button>
+            
+            <button class="btn btn-sm"
+                    hx-post="/nb/{{ notebook_path }}/cells/add?after={{ cell.id }}&cell_type=markdown"
+                    hx-target="#cell-{{ cell.id }}"
+                    hx-swap="afterend">
+                + Markdown
+            </button>
+            
+            <button class="btn btn-danger btn-sm"
+                    hx-post="/nb/{{ notebook_path }}/cells/{{ cell.id }}/delete"
+                    hx-target="#cell-{{ cell.id }}"
+                    hx-swap="outerHTML"
+                    hx-confirm="Are you sure you want to delete this cell?">
+                Delete
+            </button>
+        </div>
+    </div>
+
+    <!-- Cell content -->
+    <div class="cell-content">
+        <!-- Cell input form -->
+        <form hx-post="/nb/{{ notebook_path }}/cells/{{ cell.id }}/save"
+              hx-target="#cell-{{ cell.id }}"
+              hx-swap="outerHTML">
+            
+            <textarea name="content" 
+                      data-mode="{% if cell.cell_type == 'code' %}python{% else %}markdown{% endif %}"
+                      rows="5">{% if cell.source %}{% if cell.source is string %}{{ cell.source }}{% else %}{{ cell.source | join('') }}{% endif %}{% endif %}</textarea>
+            
+            <div style="margin-top: 8px;">
+                <button type="submit" class="btn btn-sm">
+                    <span class="htmx-indicator spinner"></span>
+                    Save
+                </button>
+                
+                {% if save_success %}
+                <span class="save-success">✓ Saved</span>
+                {% endif %}
+            </div>
+        </form>
+
+        <!-- Cell output (for code cells) -->
+        {% if cell.cell_type == "code" %}
+        <div class="cell-output" 
+             {% if run_now %}
+             hx-ext="sse" 
+             sse-connect="/nb/{{ notebook_path }}/cells/{{ cell.id }}/stream"
+             sse-swap="message"
+             sse-close="close,error"
+             {% endif %}>
+            
+            {% if cell.outputs %}
+                {% for output in cell.outputs %}
+                    {% if output.output_type == "stream" %}
+                        <div class="output stream-{{ output.name }}">
+                            <pre>{{ output.text if output.text is string else output.text | join('') }}</pre>
+                        </div>
+                    {% elif output.output_type == "error" %}
+                        <div class="output output-error">
+                            <div class="error-name">{{ output.ename }}: {{ output.evalue }}</div>
+                            {% if output.traceback %}
+                            <div class="error-traceback">
+                                {% for line in output.traceback %}
+                                    {{ line }}<br>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                    {% elif output.output_type in ["execute_result", "display_data"] %}
+                        {% if "image/png" in output.data %}
+                            <div class="output output-image">
+                                <img src="data:image/png;base64,{{ output.data['image/png'] if output.data['image/png'] is string else output.data['image/png'] | join('') }}" 
+                                     style="max-width: 100%; height: auto;" />
+                            </div>
+                        {% elif "text/html" in output.data %}
+                            <div class="output output-html">
+                                {{ output.data['text/html'] if output.data['text/html'] is string else output.data['text/html'] | join('') | safe }}
+                            </div>
+                        {% elif "text/plain" in output.data %}
+                            <div class="output output-text">
+                                <pre>{{ output.data['text/plain'] if output.data['text/plain'] is string else output.data['text/plain'] | join('') }}</pre>
+                            </div>
+                        {% endif %}
+                    {% endif %}
+                {% endfor %}
+            {% else %}
+                {% if run_now %}
+                <div class="output">
+                    <span class="htmx-indicator spinner"></span> Executing...
+                </div>
+                {% else %}
+                <div class="output" style="color: var(--text-secondary); font-style: italic;">
+                    No output yet. Run the cell to see results.
+                </div>
+                {% endif %}
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <!-- Markdown rendering (for markdown cells) -->
+        {% if cell.cell_type == "markdown" %}
+        <div class="cell-rendered" style="margin-top: 12px; padding: 12px; border: 1px solid var(--border-color); border-radius: 4px;">
+            <!-- Placeholder for markdown rendering - would need markdown processor -->
+            <div style="color: var(--text-secondary); font-style: italic;">
+                Markdown preview (to be implemented)
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<style>
+    .btn-sm {
+        padding: 4px 8px;
+        font-size: 0.8rem;
+    }
+
+    .cell-info {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+    }
+
+    .cell-id {
+        font-family: monospace;
+        background: var(--code-background);
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 0.75rem;
+    }
+
+    .execution-count {
+        color: var(--accent-color);
+        font-weight: 500;
+    }
+
+    .cell-actions {
+        display: flex;
+        gap: 4px;
+    }
+</style>
